@@ -1,0 +1,10 @@
+# requirements.txt
+flask
+flask_cors
+uvicorn==0.24.0
+routeros_api
+aiosqlite==0.19.0
+pydantic==2.5.0
+python-multipart
+pyscopg2
+dotenv
