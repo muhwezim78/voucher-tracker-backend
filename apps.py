@@ -1,4 +1,6 @@
 # app.py
+from flask_socketio import SocketIO
+
 from flask import Flask, jsonify, request, abort
 from flask_cors import CORS
 from datetime import datetime, timedelta
@@ -25,6 +27,7 @@ app = Flask(__name__)
 # CORS configuration from environment
 cors_origins = os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://localhost:3000').split(',')
 CORS(app, origins=cors_origins)
+socketio = SocketIO(app, cors_allowed_origins=cors_origins)
 
 # Database configuration from environment
 DB_CONFIG = {
@@ -1260,7 +1263,7 @@ def update_user_comment(username):
 # ----------------------------
 if __name__ == "__main__":
     host = os.getenv('FLASK_HOST', '0.0.0.0')
-    port = int(os.getenv('FLASK_PORT', 8000))
+    port = int(os.getenv('FLASK_PORT', 5000))
     debug = os.getenv('FLASK_DEBUG', 'True').lower() == 'true'
     
-    app.run(host=host, port=port, debug=debug)
+    socketio.run(app, host=host, port=port, debug=debug)

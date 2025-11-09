@@ -1,5 +1,4 @@
 from flask import Blueprint, request, jsonify, abort
-
 from utils.helpers import check_uptime_limit
 
 users_bp = Blueprint('users', __name__)
@@ -14,12 +13,15 @@ def init_users_routes(app, database_service, mikrotik_manager):
 
     @users_bp.route("/all-users")
     def get_all_users():
-        """Get all users from database (synced from MikroTik)"""
+        """Get all users from database (synced from MikroTik) efficiently"""
         rows = database_service.get_all_users()
+        
+        # Fetch all usage data from MikroTik in bulk
+        all_usage = mikrotik_manager.get_all_users_usage()  # returns {username: usage_dict}
         
         users = []
         for row in rows:
-            usage = mikrotik_manager.get_user_usage(row['username'])
+            usage = all_usage.get(row['username'], {})
             users.append({
                 'username': row['username'],
                 'profile_name': row['profile_name'],
@@ -29,28 +31,24 @@ def init_users_routes(app, database_service, mikrotik_manager):
                 'comment': row['comment'],
                 'password_type': row['password_type'],
                 'is_voucher': bool(row['is_voucher']),
-                'current_uptime': usage.get('uptime', '0s') if usage else '0s',
-                'bytes_used': (usage.get('bytes_in', 0) + usage.get('bytes_out', 0)) if usage else 0
+                'current_uptime': usage.get('uptime', '0s'),
+                'bytes_used': (usage.get('bytes_in', 0) + usage.get('bytes_out', 0))
             })
         
         return jsonify({"all_users": users})
 
     @users_bp.route("/users/expired")
     def get_expired_users():
-        """Get all expired users (both vouchers and regular users)"""
-        rows = database_service.execute_query(
-            '''
-            SELECT username, profile_name, last_seen, uptime_limit, comment, is_voucher
-            FROM all_users 
-            WHERE is_expired = TRUE
-            ORDER BY last_seen DESC
-            ''',
-            fetch=True
-        ) or []
+        """Get all expired users efficiently"""
+        rows = database_service.get_expired_users()
         
+        # Bulk fetch usage
+        expired_usernames = [row['username'] for row in rows]
+        usage_data = mikrotik_manager.get_bulk_user_usage(expired_usernames)  # returns {username: usage_dict}
+
         expired_users = []
         for row in rows:
-            usage = mikrotik_manager.get_user_usage(row['username'])
+            usage = usage_data.get(row['username'], {})
             expired_users.append({
                 'username': row['username'],
                 'profile_name': row['profile_name'],
@@ -58,7 +56,7 @@ def init_users_routes(app, database_service, mikrotik_manager):
                 'uptime_limit': row['uptime_limit'],
                 'comment': row['comment'],
                 'is_voucher': bool(row['is_voucher']),
-                'current_uptime': usage.get('uptime', '0s') if usage else '0s'
+                'current_uptime': usage.get('uptime', '0s')
             })
         
         return jsonify({"expired_users": expired_users})
@@ -66,14 +64,7 @@ def init_users_routes(app, database_service, mikrotik_manager):
     @users_bp.route("/users/<username>")
     def get_user_info(username):
         """Get detailed information for any user"""
-        result = database_service.execute_query(
-            '''
-            SELECT username, profile_name, is_active, last_seen, uptime_limit, comment, password_type, is_voucher
-            FROM all_users WHERE username=%s
-            ''',
-            (username,),
-            fetch_one=True
-        )
+        result = database_service.get_user_info(username)
         
         if not result:
             abort(404, description="User not found")

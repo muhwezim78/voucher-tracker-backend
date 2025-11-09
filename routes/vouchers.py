@@ -25,7 +25,7 @@ def init_vouchers_routes(app, voucher_service: VoucherService):
             return jsonify({"error": message}), 400
             
         total_price = sum(voucher_service.db.get_profile(voucher['profile']).get('price', 1000) 
-                         for voucher in vouchers if voucher_service.db.get_profile(voucher['profile']))
+                        for voucher in vouchers if voucher_service.db.get_profile(voucher['profile']))
             
         return jsonify({
             "vouchers": vouchers, 

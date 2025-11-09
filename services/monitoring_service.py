@@ -90,7 +90,12 @@ class MonitoringService:
         """Monitor active users and update their status"""
         try:
             active_users = self.mikrotik.get_active_users()
-            active_usernames = [user.get('user', '') for user in active_users if user.get('user')]
+            active_usernames = [u.get('user', '') for u in active_users if u.get('user')]
+            
+            all_users = self.db.execute_query('SELECT username FROM all_users', fetch=True) or []
+            all_usernames = [u['username'] for u in all_users]
+            
+            inactive_usernames = list(set(all_usernames) - set(active_usernames))
             
             # Update active status
             if active_usernames:
@@ -101,10 +106,8 @@ class MonitoringService:
                     self._handle_voucher_activation(username)
                     
                 # Mark inactive users
-                self.db.update_user_active_status(active_usernames, False)
-            else:
-                # No active users, mark all as inactive
-                self.db.execute_query('UPDATE all_users SET is_active=FALSE')
+            if inactive_usernames:
+                self.db.update_user_active_status(inactive_usernames, False)
                 
         except Exception as e:
             logger.error(f"Error in monitor_active_users: {e}")
@@ -146,24 +149,35 @@ class MonitoringService:
     def check_expired_users(self):
         """Check and mark expired users based on uptime limits"""
         try:
-            active_users = self.db.execute_query(
-                'SELECT username, uptime_limit FROM all_users WHERE is_active=TRUE',
+            users = self.db.execute_query(
+                'SELECT username, uptime_limit, is_expired FROM all_users',
                 fetch=True
             ) or []
             
-            for user in active_users:
+            active_users = self.mikrotik.get_active_users()
+            active_dict = {u.get('user'): u for u in active_users if u.get('user')}
+            
+            for user in users:
                 username = user['username']
-                uptime_limit = user['uptime_limit']
+                uptime_limit = user.get('uptime_limit', '0s') or '0s'
+                is_expired = user.get('is_expired', False)
+                
+                
                 usage = self.mikrotik.get_user_usage(username)
                 
-                if usage:
-                    current_uptime = usage.get('uptime', '0s')
-                    
+                current_uptime = usage.get('uptime', '0s') if usage else '0s'
+
                     # Check if uptime limit is reached
-                    if check_uptime_limit(current_uptime, uptime_limit):
-                        logger.info(f"User {username} has reached uptime limit")
+                if check_uptime_limit(current_uptime, uptime_limit):
+                    if username in active_dict:
+                        logger.info(f"Removing expired user {username} from router")
+                        try:
+                            self.mikrotik.remove_active_user(username)
+                        except Exception as e:
+                            logger.warning(f"Error removing user {username} from router: {e}")                       
                         
-                        # Mark as expired in database
+                    if not is_expired:
+                        logger.info(f"Marking user {username} as expired in database")    
                         self.db.execute_query(
                             'UPDATE all_users SET is_expired=TRUE, is_active=FALSE WHERE username=%s',
                             (username,)
@@ -171,7 +185,7 @@ class MonitoringService:
                         
                         # If it's a voucher, mark it as expired
                         voucher = self.db.get_voucher(username)
-                        if voucher:
+                        if voucher and not voucher.get('is_expired', False):
                             self.db.execute_query(
                                 'UPDATE vouchers SET is_expired=TRUE WHERE voucher_code=%s',
                                 (username,)

@@ -16,7 +16,7 @@ def validate_profile_name(profile_name: str) -> Tuple[bool, Optional[str]]:
     if not profile_name or len(profile_name.strip()) == 0:
         return False, "Profile name is required"
     
-    if len(profile_name) > 50:
+    if len(profile_name) > 100:
         return False, "Profile name too long"
     
     return True, None
@@ -26,8 +26,8 @@ def validate_quantity(quantity: int) -> Tuple[bool, Optional[str]]:
     if quantity < 1:
         return False, "Quantity must be at least 1"
     
-    if quantity > 100:
-        return False, "Quantity cannot exceed 100"
+    if quantity > 200:
+        return False, "Quantity cannot exceed 200"
     
     return True, None
 

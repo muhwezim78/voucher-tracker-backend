@@ -1,7 +1,6 @@
 import routeros_api
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -27,6 +26,7 @@ class MikroTikManager:
             logger.error(f"MikroTik connection failed: {e}")
             return None, None
 
+    # -------------------- Profiles --------------------
     def get_profiles(self) -> List[Dict[str, Any]]:
         """Get all hotspot user profiles"""
         connection, api = self.get_api()
@@ -34,8 +34,7 @@ class MikroTikManager:
             return []
         try:
             profiles = api.get_resource('/ip/hotspot/user/profile')
-            result = profiles.get()
-            return result
+            return profiles.get()
         except Exception as e:
             logger.error(f"Error fetching profiles: {e}")
             return []
@@ -43,8 +42,9 @@ class MikroTikManager:
             if connection:
                 connection.disconnect()
 
-    def create_voucher(self, profile_name: str, code: str, password: Optional[str] = None, 
-                      comment: str = "", uptime_limit: str = "1d") -> bool:
+    # -------------------- Voucher/User management --------------------
+    def create_voucher(self, profile_name: str, code: str, password: Optional[str] = None,
+                       comment: str = "", uptime_limit: str = "1d") -> bool:
         """Create voucher user on MikroTik"""
         connection, api = self.get_api()
         if not api:
@@ -52,7 +52,7 @@ class MikroTikManager:
         try:
             users = api.get_resource('/ip/hotspot/user')
             
-            # Determine final password
+            # Determine password
             final_password = ""
             if password == "same":
                 final_password = code
@@ -60,14 +60,14 @@ class MikroTikManager:
                 final_password = password
             
             users.add(
-                name=code, 
-                password=final_password, 
-                profile=profile_name, 
-                comment=comment, 
+                name=code,
+                password=final_password,
+                profile=profile_name,
+                comment=comment,
                 disabled='no',
                 limit_uptime=uptime_limit
             )
-            logger.info(f"Voucher {code} created with profile {profile_name} and uptime limit {uptime_limit}")
+            logger.info(f"Voucher {code} created with profile {profile_name} and uptime {uptime_limit}")
             return True
         except Exception as e:
             logger.error(f"Error creating voucher: {e}")
@@ -83,8 +83,7 @@ class MikroTikManager:
             return []
         try:
             users = api.get_resource('/ip/hotspot/user')
-            result = users.get()
-            return result
+            return users.get()
         except Exception as e:
             logger.error(f"Error fetching all users: {e}")
             return []
@@ -100,18 +99,16 @@ class MikroTikManager:
         try:
             active = api.get_resource('/ip/hotspot/active')
             result = active.get()
-            # Format the result to match frontend expectations
             formatted_result = []
             for user in result:
-                formatted_user = {
+                formatted_result.append({
                     'user': user.get('user', ''),
                     'profile': user.get('profile', ''),
                     'uptime': user.get('uptime', ''),
                     'bytes-in': user.get('bytes-in', '0'),
                     'bytes-out': user.get('bytes-out', '0'),
                     'server': user.get('server', '')
-                }
-                formatted_result.append(formatted_user)
+                })
             return formatted_result
         except Exception as e:
             logger.error(f"Error fetching active users: {e}")
@@ -145,6 +142,71 @@ class MikroTikManager:
             if connection:
                 connection.disconnect()
 
+    # -------------------- Bulk Usage (Optimization) --------------------
+    def get_all_users_usage(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch all hotspot users and their usage stats in a single API call.
+        Returns a dictionary keyed by username.
+        """
+        connection, api = self.get_api()
+        if not api:
+            return {}
+        try:
+            users = api.get_resource('/ip/hotspot/user')
+            user_list = users.get()
+            
+            usage_dict = {}
+            for u in user_list:
+                username = u.get('name')
+                usage_dict[username] = {
+                    'bytes_in': int(u.get('bytes-in', 0)),
+                    'bytes_out': int(u.get('bytes-out', 0)),
+                    'uptime': u.get('uptime', '0s'),
+                    'limit_uptime': u.get('limit-uptime', ''),
+                    'disabled': u.get('disabled', 'no'),
+                    'comment': u.get('comment', '')
+                }
+            return usage_dict
+        except Exception as e:
+            logger.error(f"Error fetching all users usage: {e}")
+            return {}
+        finally:
+            if connection:
+                connection.disconnect()
+
+    def get_bulk_user_usage(self, usernames: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch usage only for specific usernames efficiently.
+        Returns a dictionary keyed by username.
+        """
+        connection, api = self.get_api()
+        if not api:
+            return {}
+        try:
+            users = api.get_resource('/ip/hotspot/user')
+            user_list = users.get()
+            
+            usage_dict = {}
+            for u in user_list:
+                name = u.get('name')
+                if name in usernames:
+                    usage_dict[name] = {
+                        'bytes_in': int(u.get('bytes-in', 0)),
+                        'bytes_out': int(u.get('bytes-out', 0)),
+                        'uptime': u.get('uptime', '0s'),
+                        'limit_uptime': u.get('limit-uptime', ''),
+                        'disabled': u.get('disabled', 'no'),
+                        'comment': u.get('comment', '')
+                    }
+            return usage_dict
+        except Exception as e:
+            logger.error(f"Error fetching bulk user usage: {e}")
+            return {}
+        finally:
+            if connection:
+                connection.disconnect()
+
+    # -------------------- System Info --------------------
     def get_system_info(self) -> Dict[str, Any]:
         """Get MikroTik system information"""
         connection, api = self.get_api()
@@ -174,6 +236,7 @@ class MikroTikManager:
             if connection:
                 connection.disconnect()
 
+    # -------------------- User Removal/Update --------------------
     def remove_expired_user(self, username: str) -> bool:
         """Remove expired user from MikroTik"""
         connection, api = self.get_api()
@@ -183,8 +246,7 @@ class MikroTikManager:
             users = api.get_resource('/ip/hotspot/user')
             user_list = users.get(name=username)
             if user_list:
-                user_id = user_list[0].get('id')
-                users.remove(id=user_id)
+                users.remove(id=user_list[0]['id'])
                 logger.info(f"Removed expired user: {username}")
                 return True
             return False
@@ -204,8 +266,7 @@ class MikroTikManager:
             users = api.get_resource('/ip/hotspot/user')
             user_list = users.get(name=username)
             if user_list:
-                user_id = user_list[0].get('id')
-                users.set(id=user_id, comment=comment)
+                users.set(id=user_list[0]['id'], comment=comment)
                 logger.info(f"Updated comment for user: {username}")
                 return True
             return False

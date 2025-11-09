@@ -8,3 +8,6 @@ pydantic==2.5.0
 python-multipart
 pyscopg2
 dotenv
+flask-socketio
+eventlet
+python-socketio

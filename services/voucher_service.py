@@ -11,6 +11,7 @@ from utils.validators import validate_voucher_code, validate_profile_name, valid
 
 logger = logging.getLogger(__name__)
 
+
 class VoucherService:
     def __init__(self, config: Config, database_service, mikrotik_manager):
         self.config = config
@@ -30,7 +31,7 @@ class VoucherService:
                 return code
 
     def create_vouchers(self, profile_name: str, quantity: int, customer_name: str = "", 
-                       customer_contact: str = "", password_type: str = "blank") -> Tuple[bool, List[Dict[str, Any]], str]:
+                    customer_contact: str = "", password_type: str = "blank") -> Tuple[bool, List[Dict[str, Any]], str]:
         """Create multiple vouchers"""
         # Validate inputs
         is_valid, error = validate_profile_name(profile_name)
@@ -70,7 +71,8 @@ class VoucherService:
                     customer_contact=customer_contact,
                     expiry_time=calculate_expiry_time(validity_period),
                     uptime_limit=uptime_limit,
-                    password_type=password_type
+                    password_type=password_type,
+                    created_at=datetime.now()
                 )
                 
                 if not self.db.add_voucher(voucher):
