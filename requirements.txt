@@ -11,3 +11,4 @@ dotenv
 flask-socketio
 eventlet
 python-socketio
+reportlab

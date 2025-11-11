@@ -2,27 +2,24 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 import logging
 
-financial_bp = Blueprint('financial', __name__)
+financial_bp = Blueprint("financial", __name__)
 logger = logging.getLogger(__name__)
+
 
 def init_financial_routes(app, database_service, mikrotik_manager):
     """Initialize financial routes"""
 
-    # ---------------------------------------------------------
-    # /financial/stats — overall stats summary
-    # ---------------------------------------------------------
     @financial_bp.route("/financial/stats")
     def get_financial_stats():
         try:
-            stats = database_service.get_financial_stats(mikrotik_manager=mikrotik_manager)
+            stats = database_service.get_financial_stats(
+                mikrotik_manager=mikrotik_manager
+            )
             return jsonify(stats)
         except Exception as e:
             logger.error(f"Error getting financial stats: {e}")
             return jsonify({"error": str(e)}), 500
 
-    # ---------------------------------------------------------
-    # /financial/active-revenue — trigger DB sync + return active revenue
-    # ---------------------------------------------------------
     @financial_bp.route("/financial/active-revenue")
     def get_active_revenue():
         """
@@ -30,7 +27,9 @@ def init_financial_routes(app, database_service, mikrotik_manager):
         """
         try:
             # Step 1: Get live users from MikroTik
-            active_users = mikrotik_manager.get_active_users() or []  # [{username, profile_name, uptime}, ...]
+            active_users = (
+                mikrotik_manager.get_active_users() or []
+            )  # [{username, profile_name, uptime}, ...]
 
             # Step 2: Record & update users in DB (this automatically handles transactions)
             database_service.record_active_users(active_users)
@@ -39,17 +38,16 @@ def init_financial_routes(app, database_service, mikrotik_manager):
             daily_revenue = database_service.calculate_daily_revenue()
 
             # Step 4: Respond
-            return jsonify({
-                "active_users_count": len(active_users),
-                "daily_revenue": daily_revenue
-            })
+            return jsonify(
+                {
+                    "active_users_count": len(active_users),
+                    "daily_revenue": daily_revenue,
+                }
+            )
         except Exception as e:
             logger.error(f"Error in /financial/active-revenue: {e}")
             return jsonify({"error": str(e)}), 500
 
-    # ---------------------------------------------------------
-    # /financial/revenue-data — N-day historical revenue
-    # ---------------------------------------------------------
     @financial_bp.route("/financial/revenue-data")
     def get_revenue_data():
         """
@@ -62,20 +60,23 @@ def init_financial_routes(app, database_service, mikrotik_manager):
                 rows = database_service.get_revenue_data(days) or []
             else:
                 # Safe fallback query
-                rows = database_service.execute_query(
-                    '''
+                rows = (
+                    database_service.execute_query(
+                        """
                     SELECT DATE(transaction_date) AS date,
-                           SUM(amount) AS revenue,
-                           COUNT(DISTINCT voucher_code) AS voucher_count
+                        SUM(amount) AS revenue,
+                        COUNT(DISTINCT voucher_code) AS voucher_count
                     FROM financial_transactions
                     WHERE transaction_type='SALE'
-                      AND transaction_date >= CURRENT_DATE - INTERVAL '%s days'
+                    AND transaction_date >= CURRENT_DATE - INTERVAL '%s days'
                     GROUP BY DATE(transaction_date)
                     ORDER BY date ASC
-                    ''',
-                    (days,),
-                    fetch=True
-                ) or []
+                    """,
+                        (days,),
+                        fetch=True,
+                    )
+                    or []
+                )
 
             # Normalize to full-day window, filling empty days with 0
             data = []
@@ -83,11 +84,13 @@ def init_financial_routes(app, database_service, mikrotik_manager):
             for i in range(days):
                 date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
                 r = row_map.get(date, {"revenue": 0, "voucher_count": 0})
-                data.append({
-                    "date": date,
-                    "revenue": r["revenue"] or 0,
-                    "voucher_count": r["voucher_count"] or 0
-                })
+                data.append(
+                    {
+                        "date": date,
+                        "revenue": r["revenue"] or 0,
+                        "voucher_count": r["voucher_count"] or 0,
+                    }
+                )
 
             data.reverse()
             return jsonify({"revenue_data": data})
@@ -95,9 +98,6 @@ def init_financial_routes(app, database_service, mikrotik_manager):
             logger.error(f"Error in /financial/revenue-data: {e}")
             return jsonify({"error": str(e)}), 500
 
-    # ---------------------------------------------------------
-    # /financial/profile-stats — revenue by bandwidth profile
-    # ---------------------------------------------------------
     @financial_bp.route("/financial/profile-stats")
     def get_profile_stats():
         """
@@ -105,26 +105,27 @@ def init_financial_routes(app, database_service, mikrotik_manager):
         """
         try:
             rows = database_service.execute_query(
-                '''
-                SELECT v.profile_name,
-                       COUNT(v.voucher_code) AS total_sold,
-                       SUM(CASE WHEN ft.amount IS NOT NULL THEN ft.amount ELSE 0 END) AS total_revenue,
-                       SUM(CASE WHEN v.is_used = TRUE THEN 1 ELSE 0 END) AS used_count
-                FROM vouchers v
-                LEFT JOIN financial_transactions ft
-                    ON v.voucher_code = ft.voucher_code AND ft.transaction_type='SALE'
-                GROUP BY v.profile_name
-                ORDER BY total_sold DESC
-                ''',
-                fetch=True
-            ) or []
+                """
+    SELECT v.profile_name,
+        COUNT(v.voucher_code) AS total_created,
+        COUNT(ft.id) AS total_sold,
+        COALESCE(SUM(ft.amount), 0) AS total_revenue,
+        COUNT(CASE WHEN v.is_used = TRUE THEN 1 END) AS used_count
+    FROM vouchers v
+    LEFT JOIN financial_transactions ft
+        ON v.voucher_code = ft.voucher_code AND ft.transaction_type='SALE'
+    GROUP BY v.profile_name
+    ORDER BY total_sold DESC
+    """,
+                fetch=True,
+            )
 
             profile_stats = [
                 {
                     "profile_name": r["profile_name"],
                     "total_sold": r["total_sold"],
                     "total_revenue": r["total_revenue"] or 0,
-                    "used_count": r["used_count"]
+                    "used_count": r["used_count"],
                 }
                 for r in rows
             ]
@@ -134,7 +135,4 @@ def init_financial_routes(app, database_service, mikrotik_manager):
             logger.error(f"Error in /financial/profile-stats: {e}")
             return jsonify({"error": str(e)}), 500
 
-    # ---------------------------------------------------------
-    # REGISTER BLUEPRINT ON APP
-    # ---------------------------------------------------------
     app.register_blueprint(financial_bp)

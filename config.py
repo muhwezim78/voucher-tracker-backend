@@ -22,7 +22,7 @@ class Config:
     
     # Flask configuration
     FLASK_HOST = os.getenv('FLASK_HOST', '0.0.0.0')
-    FLASK_PORT = int(os.getenv('FLASK_PORT', 8000))
+    FLASK_PORT = int(os.getenv('FLASK_PORT', 5000))
     FLASK_DEBUG = os.getenv('FLASK_DEBUG', 'True').lower() == 'true'
     
     # CORS configuration
@@ -34,3 +34,6 @@ class Config:
         '7d': {'length': 6, 'chars': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'},
         '30d': {'length': 7, 'chars': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'}
     }
+    
+    PDF_OUTPUT_DIR = "generated_vouchers"
+    PDF_TEMPLATE_DIR = "templates"
