@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, abort
 from utils.helpers import check_uptime_limit
 import math
+from functools import lru_cache
 
 users_bp = Blueprint("users", __name__)
 
@@ -50,6 +51,7 @@ def init_users_routes(app, database_service, mikrotik_manager):
             },
         }
 
+    @lru_cache(maxsize=1)
     @users_bp.route("/active-users")
     def get_active_users():
         """Get active users with pagination"""
@@ -82,7 +84,7 @@ def init_users_routes(app, database_service, mikrotik_manager):
         """Get all users from database (synced from MikroTik) efficiently with pagination"""
         # Get pagination parameters with defaults
         page = request.args.get("page", 1, type=int)
-        per_page = request.args.get("per_page", 200, type=int)
+        per_page = request.args.get("per_page", 100, type=int)
 
         # Validate pagination parameters
         if page < 1:
@@ -132,7 +134,7 @@ def init_users_routes(app, database_service, mikrotik_manager):
         """Get all expired users efficiently with pagination"""
         # Get pagination parameters with defaults
         page = request.args.get("page", 1, type=int)
-        per_page = request.args.get("per_page", 200, type=int)
+        per_page = request.args.get("per_page", 100, type=int)
 
         # Validate pagination parameters
         if page < 1:

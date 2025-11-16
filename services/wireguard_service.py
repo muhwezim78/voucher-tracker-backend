@@ -7,11 +7,11 @@ from flask import Flask, request, jsonify, g, Blueprint
 
 class WireguardService:
     
-def create_peer():
+    def create_peer():
     
     
     
-    return jsonify({})  
+        return jsonify({})  
 
 
 def auto_wireguard_config():
@@ -34,6 +34,12 @@ def get_next_interface_address():
     
     
     return jsonify({})
+
+def get_router_endpoint():
+    
+    return jsonify({})
+
+
 
 
 
