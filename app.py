@@ -152,8 +152,12 @@ def create_app():
     )
     app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", app.config["SECRET_KEY"])
 
-    # Initialize CORS
-    CORS(app, origins=config.CORS_ORIGINS)
+    # Initialize CORS with full configuration for preflight requests
+    CORS(app, 
+         origins=config.CORS_ORIGINS,
+         supports_credentials=True,
+         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
     # Initialize SocketIO
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")

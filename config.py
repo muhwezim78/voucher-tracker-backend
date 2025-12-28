@@ -25,8 +25,8 @@ class Config:
     FLASK_PORT = int(os.getenv('FLASK_PORT', 5000))
     FLASK_DEBUG = os.getenv('FLASK_DEBUG', 'True').lower() == 'true'
     
-    # CORS configuration
-    CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://localhost:3000').split(',')
+    # CORS configuration - include all allowed frontend origins
+    CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://localhost:3000,https://blox-b1718.web.app').split(',')
     
     # Voucher configuration
     VOUCHER_CONFIG = {

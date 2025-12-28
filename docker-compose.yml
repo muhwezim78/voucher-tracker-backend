@@ -60,8 +60,8 @@ services:
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
       TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER:-}
       
-      # CORS
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      # CORS - include your Firebase hosting domain
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,https://blox-b1718.web.app}
     ports:
       - "0.0.0.0:5000:5000"
     volumes:
