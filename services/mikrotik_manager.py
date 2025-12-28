@@ -1,5 +1,6 @@
 import routeros_api
 import logging
+import threading
 from typing import List, Dict, Any, Optional, Tuple
 from config import Config
 
@@ -11,25 +12,35 @@ class MikroTikManager:
         self.host = config.MIKROTIK_CONFIG["host"]
         self.username = config.MIKROTIK_CONFIG["username"]
         self.password = config.MIKROTIK_CONFIG["password"]
-        self._pool = routeros_api.RouterOsApiPool(
-            self.host,
-            username=self.username,
-            password=self.password,
-            plaintext_login=True,
-        )
+        self._lock = threading.Lock()
         logger.info(f"MikroTikManager initialized for host {self.host}")
 
-    def get_api(self):
-        """Return an API connection from the pool"""
+    def get_api(self) -> Tuple[Optional[routeros_api.RouterOsApiPool], Optional[Any]]:
+        """Return a new MikroTik API connection (thread-safe for eventlet)"""
         try:
-            return self._pool.get_api()
+            connection = routeros_api.RouterOsApiPool(
+                self.host,
+                username=self.username,
+                password=self.password,
+                plaintext_login=True,
+            )
+            api = connection.get_api()
+            return connection, api
         except Exception as e:
             logger.error(f"MikroTik connection failed: {e}")
-            return None
+            return None, None
+
+    def _safe_disconnect(self, connection):
+        """Safely disconnect a connection"""
+        if connection:
+            try:
+                connection.disconnect()
+            except:
+                pass
 
     def get_profiles(self) -> List[Dict[str, Any]]:
         """Get all hotspot user profiles"""
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return []
         try:
@@ -38,7 +49,8 @@ class MikroTikManager:
         except Exception as e:
             logger.error(f"Error fetching profiles: {e}")
             return []
-        # No need to disconnect here as it's pooled
+        finally:
+            self._safe_disconnect(connection)
 
     def create_voucher(
         self,
@@ -49,7 +61,7 @@ class MikroTikManager:
         uptime_limit: str = "1d",
     ) -> bool:
         """Create voucher user on MikroTik"""
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return False
         try:
@@ -77,10 +89,12 @@ class MikroTikManager:
         except Exception as e:
             logger.error(f"Error creating voucher: {e}")
             return False
+        finally:
+            self._safe_disconnect(connection)
 
     def get_all_users(self) -> List[Dict[str, Any]]:
         """Get all hotspot users from MikroTik"""
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return []
         try:
@@ -89,10 +103,12 @@ class MikroTikManager:
         except Exception as e:
             logger.error(f"Error fetching all users: {e}")
             return []
+        finally:
+            self._safe_disconnect(connection)
 
     def get_active_users(self) -> List[Dict[str, Any]]:
         """Get currently active hotspot users"""
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return []
         try:
@@ -114,10 +130,12 @@ class MikroTikManager:
         except Exception as e:
             logger.error(f"Error fetching active users: {e}")
             return []
+        finally:
+            self._safe_disconnect(connection)
 
     def get_user_usage(self, username: str) -> Optional[Dict[str, Any]]:
         """Get usage statistics for a specific user"""
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return None
         try:
@@ -136,13 +154,15 @@ class MikroTikManager:
         except Exception as e:
             logger.error(f"Error fetching user usage: {e}")
             return None
+        finally:
+            self._safe_disconnect(connection)
 
     def get_all_users_usage(self) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all hotspot users and their usage stats in a single API call.
         Returns a dictionary keyed by username.
         """
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return {}
         try:
@@ -164,13 +184,15 @@ class MikroTikManager:
         except Exception as e:
             logger.error(f"Error fetching all users usage: {e}")
             return {}
+        finally:
+            self._safe_disconnect(connection)
 
     def get_bulk_user_usage(self, usernames: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Fetch usage only for specific usernames efficiently.
         Returns a dictionary keyed by username.
         """
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return {}
         try:
@@ -193,10 +215,12 @@ class MikroTikManager:
         except Exception as e:
             logger.error(f"Error fetching bulk user usage: {e}")
             return {}
+        finally:
+            self._safe_disconnect(connection)
 
     def get_system_info(self) -> Dict[str, Any]:
         """Get MikroTik system information including exact model with better error handling"""
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return {}
 
@@ -256,10 +280,12 @@ class MikroTikManager:
             except Exception as fallback_error:
                 logger.error(f"Fallback system info also failed: {fallback_error}")
             return {}
+        finally:
+            self._safe_disconnect(connection)
 
     def remove_expired_user(self, username: str) -> bool:
         """Remove expired user from MikroTik"""
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return False
         try:
@@ -273,10 +299,12 @@ class MikroTikManager:
         except Exception as e:
             logger.error(f"Error removing expired user {username}: {e}")
             return False
+        finally:
+            self._safe_disconnect(connection)
 
     def update_user_comment(self, username: str, comment: str) -> bool:
         """Update user comment in MikroTik"""
-        api = self.get_api()
+        connection, api = self.get_api()
         if not api:
             return False
         try:
@@ -290,3 +318,5 @@ class MikroTikManager:
         except Exception as e:
             logger.error(f"Error updating user comment {username}: {e}")
             return False
+        finally:
+            self._safe_disconnect(connection)
