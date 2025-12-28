@@ -31,3 +31,6 @@ db_serv.py
 # OS
 .DS_Store
 Thumbs.db
+privatekey
+publickey
+.env
