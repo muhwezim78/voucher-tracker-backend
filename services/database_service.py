@@ -22,8 +22,16 @@ class DatabaseService:
         self.config = config
         self.db_lock = threading.Lock()
         self._connection_pool = []
-        self._max_pool_size = 5
+        self._max_pool_size = 10  # Increased for more workers
         self._pool_lock = threading.Lock()
+        
+        # Caching logic
+        self._profile_cache = {}
+        self._cache_lock = threading.Lock()
+        self._cache_ttl = 300  # 5 minutes cache TTL
+        self._last_cache_cleanup = time.time()
+        
+        logger.info("DatabaseService initialized with connection pooling and caching")
 
     @contextmanager
     def get_connection(self):
@@ -55,14 +63,18 @@ class DatabaseService:
                             conn.close()
                 except Exception as e:
                     logger.warning(f"Error returning connection to pool: {e}")
-                    conn.close()
+                    if not conn.closed:
+                        conn.close()
 
     def _create_connection(self):
         """Create new database connection with optimized settings"""
-        conn = psycopg2.connect(**self.config.DB_CONFIG)
-        # Optimize connection settings
-        conn.autocommit = False
-        return conn
+        try:
+            conn = psycopg2.connect(**self.config.DB_CONFIG)
+            conn.autocommit = False
+            return conn
+        except Exception as e:
+            logger.error(f"Failed to create database connection: {e}")
+            raise
 
     def execute_query(
         self,
@@ -93,14 +105,15 @@ class DatabaseService:
 
                     # Log slow queries for optimization
                     execution_time = time.time() - start_time
-                    if execution_time > 1.0:  # Log queries taking more than 1 second
+                    if execution_time > 1.0:
                         logger.warning(
                             f"Slow query detected ({execution_time:.2f}s): {query[:100]}..."
                         )
 
                     return result
             except Exception as e:
-                conn.rollback()
+                if conn:
+                    conn.rollback()
                 logger.error(f"Database error in query '{query[:50]}...': {e}")
                 raise
 
@@ -274,17 +287,6 @@ class DatabaseService:
     # ---------------------------------------------------------
     # PROFILES (OPTIMIZED WITH CACHING)
     # ---------------------------------------------------------
-    def __init__(self, config: Config):
-        self.config = config
-        self.db_lock = threading.Lock()
-        self._connection_pool = []
-        self._max_pool_size = 5
-        self._pool_lock = threading.Lock()
-        self._profile_cache = {}
-        self._cache_lock = threading.Lock()
-        self._cache_ttl = 300  # 5 minutes cache TTL
-        self._last_cache_cleanup = time.time()
-
     def _clean_cache_if_needed(self):
         """Clean cache periodically"""
         current_time = time.time()

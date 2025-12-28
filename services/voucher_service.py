@@ -78,7 +78,10 @@ class VoucherService:
         password_type: str = "blank",
         generate_pdf: bool = False,
     ) -> Tuple[bool, List[Dict[str, Any]], str]:
-        """Create multiple vouchers"""
+        """Create multiple vouchers with parallel execution for speed"""
+        from concurrent.futures import ThreadPoolExecutor
+        import time
+
         # Validate inputs
         is_valid, error = validate_profile_name(profile_name)
         if not is_valid:
@@ -101,89 +104,101 @@ class VoucherService:
         price_per_voucher = db_profile.get("price", 1000)
         validity_period = db_profile.get("validity_period", 24)
 
-        vouchers = []
-        total_price = 0
-        successful_creations = 0
-        pdf_paths = []
+        logger.info(f"Generating {quantity} vouchers for profile {profile_name}")
 
-        for i in range(quantity):
-            try:
-                voucher_code = self.generate_voucher_code(uptime_limit)
+        codes = []
+        for _ in range(quantity):
+            codes.append(self.generate_voucher_code(uptime_limit))
 
-                # Create voucher in database
-                voucher = Voucher(
-                    voucher_code=voucher_code,
-                    profile_name=profile_name,
-                    customer_name=customer_name,
-                    customer_contact=customer_contact,
-                    expiry_time=calculate_expiry_time(validity_period),
-                    uptime_limit=uptime_limit,
-                    password_type=password_type,
-                    created_at=datetime.now(),
-                )
-
-                if not self.db.add_voucher(voucher):
-                    continue
-
-                # Create voucher on MikroTik
-                password = self._determine_password(password_type, voucher_code)
-                comment = self._create_user_comment(
-                    customer_name, customer_contact, password_type
-                )
-
-                success = self.mikrotik.create_voucher(
-                    profile_name, voucher_code, password, comment, uptime_limit
-                )
-
-                if success:
-                    password_display = self._get_password_display(
-                        password_type, password
-                    )
-                    voucher_data = {
-                        "code": voucher_code,
-                        "password": password_display,
-                        "profile": profile_name,
-                        "uptime_limit": uptime_limit,
-                        "customer_name": customer_name,
-                        "customer_contact": customer_contact,
-                        "expiry_time": voucher.expiry_time,
-                        "created_at": voucher.created_at,
-                        "price": price_per_voucher,
-                    }
-                    vouchers.append(voucher_data)
-                    total_price += price_per_voucher
-                    successful_creations += 1
-
-                    if generate_pdf and PDF_AVAILABLE:
-                        pdf_path = self.generate_single_voucher_pdf(voucher_data)
-                        if pdf_path:
-                            pdf_paths.append(pdf_path)
-                            voucher_data["pdf_path"] = pdf_path
-
-                else:
-                    logger.error(f"Failed to create voucher {voucher_code} on MikroTik")
-
-            except Exception as e:
-                logger.error(f"Error creating voucher {i+1}: {e}")
-                continue
-        if generate_pdf and PDF_AVAILABLE and len(vouchers) > 1:
-            batch_pdf_path = self.generate_batch_vouchers_pdf(
-                vouchers, profile_name, customer_name
+        vouchers_data = []
+        vouchers_to_db = []
+        
+        # Parallel MikroTik Creation
+        def create_on_mikrotik(code):
+            password = self._determine_password(password_type, code)
+            comment = self._create_user_comment(
+                customer_name, customer_contact, password_type
             )
-            if batch_pdf_path:
-                for voucher in vouchers:
-                    voucher["batch_pdf_path"] = batch_pdf_path
+            success = self.mikrotik.create_voucher(
+                profile_name, code, password, comment, uptime_limit
+            )
+            if success:
+                expiry = calculate_expiry_time(validity_period)
+                created = datetime.now()
+                return {
+                    "code": code,
+                    "password": self._get_password_display(password_type, password),
+                    "profile": profile_name,
+                    "uptime_limit": uptime_limit,
+                    "customer_name": customer_name,
+                    "customer_contact": customer_contact,
+                    "expiry_time": expiry,
+                    "created_at": created,
+                    "password_type": password_type,
+                    "price": price_per_voucher
+                }
+            return None
 
-        if successful_creations == 0:
-            return False, [], "Failed to create any vouchers"
+        # Increase workers for big tasks
+        max_workers = min(10, quantity)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            creation_results = list(executor.map(create_on_mikrotik, codes))
 
-        message = (
-            f"Successfully created {successful_creations} out of {quantity} vouchers"
-        )
+        # Filter successes
+        successful_vouchers = [v for v in creation_results if v is not None]
+        
+        if not successful_vouchers:
+            return False, [], "Failed to create any vouchers on MikroTik"
+
+        # Batch Database Insertion
+        db_vouchers = [
+            Voucher(
+                voucher_code=v["code"],
+                profile_name=v["profile"],
+                customer_name=v["customer_name"],
+                customer_contact=v["customer_contact"],
+                expiry_time=v["expiry_time"],
+                uptime_limit=v["uptime_limit"],
+                password_type=v["password_type"],
+                created_at=v["created_at"]
+            )
+            for v in successful_vouchers
+        ]
+        
+        if self.db.add_vouchers_batch(db_vouchers):
+            vouchers_data = successful_vouchers
+        else:
+            logger.error("Failed to add vouchers to database after MikroTik creation")
+            # Note: At this point, vouchers are on MikroTik but not in DB. 
+            # In a perfectly robust system, we would attempt rollback on MikroTik.
+            return False, [], "Failed to record vouchers in database"
+
+        # Parallel PDF Generation if requested
+        if generate_pdf and PDF_AVAILABLE:
+            def gen_pdf(v):
+                pdf_path = self.generate_single_voucher_pdf(v)
+                if pdf_path:
+                    v["pdf_path"] = pdf_path
+                return v
+
+            with ThreadPoolExecutor(max_workers=min(5, len(vouchers_data))) as executor:
+                vouchers_data = list(executor.map(gen_pdf, vouchers_data))
+
+            # Batch PDF
+            if len(vouchers_data) > 1:
+                batch_pdf_path = self.generate_batch_vouchers_pdf(
+                    vouchers_data, profile_name, customer_name
+                )
+                if batch_pdf_path:
+                    for v in vouchers_data:
+                        v["batch_pdf_path"] = batch_pdf_path
+
+        successful_creations = len(vouchers_data)
+        message = f"Successfully created {successful_creations} out of {quantity} vouchers"
         if successful_creations < quantity:
-            message += f". {quantity - successful_creations} failed."
+            message += f". {quantity - successful_creations} failed on MikroTik."
 
-        return True, vouchers, message
+        return True, vouchers_data, message
 
     def generate_single_voucher_pdf(
         self, voucher_data: Dict[str, Any]

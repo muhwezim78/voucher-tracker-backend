@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: voucher_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-voucher_system}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "0.0.0.0:5432:5432"
+    networks:
+      - voucher_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-voucher_system}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Voucher Tracker Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voucher_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database Configuration
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-voucher_system}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres123}
+      
+      # MikroTik Configuration
+      MIKROTIK_HOST: ${MIKROTIK_HOST:-192.168.88.1}
+      MIKROTIK_USERNAME: ${MIKROTIK_USERNAME:-admin}
+      MIKROTIK_PASSWORD: ${MIKROTIK_PASSWORD}
+      
+      # Flask Configuration
+      FLASK_HOST: 0.0.0.0
+      FLASK_PORT: 5000
+      FLASK_DEBUG: ${FLASK_DEBUG:-false}
+      
+      # Security Keys
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-change-this-secret-key-in-production}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-jwt-key-in-production}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-change-this-encryption-key}
+      
+      # Twilio (SMS)
+      TWILIO_SID: ${TWILIO_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER:-}
+      
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    ports:
+      - "0.0.0.0:5000:5000"
+    volumes:
+      - ./generated_vouchers:/app/generated_vouchers
+    networks:
+      - voucher_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  voucher_network:
+    driver: bridge

@@ -1,7 +1,9 @@
 from flask import Blueprint, request, jsonify, abort
 from utils.helpers import check_uptime_limit
 import math
-from functools import lru_cache
+import os
+from flask import request, jsonify
+from werkzeug.security import check_password_hash, generate_password_hash
 
 users_bp = Blueprint("users", __name__)
 
@@ -51,7 +53,6 @@ def init_users_routes(app, database_service, mikrotik_manager):
             },
         }
 
-    @lru_cache(maxsize=1)
     @users_bp.route("/active-users")
     def get_active_users():
         """Get active users with pagination"""
@@ -227,6 +228,32 @@ def init_users_routes(app, database_service, mikrotik_manager):
         )
 
         return jsonify({"message": "Comment updated successfully"})
+    
+    @users_bp.route("/admin/login-only", methods=["POST"])
+    def special_login():
+        """
+    Special login route that only allows users defined in environment variables.
+    Environment variables:
+        ADMIN_EMAIL
+        ADMIN_PASSWORD  (store hashed password for security)
+        """
+        data = request.json or {}
+        email = data.get("email")
+        password = data.get("password")
+
+        if not email or not password:
+            return jsonify({"error": "Email and password are required"}), 400
+
+        # Load credentials from environment
+        admin_email = os.getenv("ADMIN_EMAIL")
+        admin_password_hash = os.getenv("ADMIN_PASSWORD_HASH")  # hashed password
+
+        # Simple email/password check
+        if email != admin_email or not check_password_hash(admin_password_hash, password):
+            return jsonify({"error": "Invalid credentials"}), 401
+
+        # Successful login
+        return jsonify({"message": "Login successful", "user": email})
 
     # Register blueprint
     app.register_blueprint(users_bp)

@@ -68,12 +68,42 @@ def _initialize_routes(
                 else "unhealthy"
             )
 
+            # Test MikroTik connection
+            mikrotik_status = "unknown"
+            try:
+                system_info = mikrotik_manager.get_system_info()
+                mikrotik_status = "healthy" if system_info else "unhealthy"
+            except Exception as mt_err:
+                logger.warning(f"MikroTik health check failed: {mt_err}")
+                mikrotik_status = "unhealthy"
+
+            # Check monitoring service threads
+            monitoring_status = "unknown"
+            try:
+                monitoring_svc = app.config.get("monitoring_service")
+                if monitoring_svc:
+                    threads_alive = all(
+                        t.is_alive() for t in monitoring_svc._threads.values()
+                    ) if monitoring_svc._threads else False
+                    monitoring_status = "healthy" if threads_alive else "degraded"
+            except Exception as mon_err:
+                logger.warning(f"Monitoring health check failed: {mon_err}")
+                monitoring_status = "unhealthy"
+
+            overall_healthy = (
+                db_status == "healthy" and 
+                mikrotik_status == "healthy" and 
+                monitoring_status in ("healthy", "unknown")
+            )
+
             return jsonify(
                 {
-                    "success": True,
-                    "status": "service is running",
+                    "success": overall_healthy,
+                    "status": "service is running" if overall_healthy else "degraded",
                     "services": {
                         "database": db_status,
+                        "mikrotik": mikrotik_status,
+                        "monitoring": monitoring_status,
                         "authentication": "healthy",
                         "voucher_service": "healthy",
                     },

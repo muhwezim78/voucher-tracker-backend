@@ -359,7 +359,7 @@ class MonitoringService:
             logger.exception("_maybe_update_usage failed for %s", username)
 
     def check_expired_users(self):
-        """Expire users exceeding uptime limit."""
+        """Expire users exceeding uptime limit - optimized with bulk fetch."""
         try:
             rows = (
                 self.db.execute_query(
@@ -371,6 +371,10 @@ class MonitoringService:
             if not rows:
                 return
 
+            # Bulk fetch all usage at once to avoid N+1 queries
+            usernames = [r["username"] for r in rows]
+            all_usage = self.mikrotik.get_bulk_user_usage(usernames)
+
             active_entries = self.mikrotik.get_active_users() or []
             active_map = {
                 (e.get("user") or e.get("name") or e.get("username")): e
@@ -378,11 +382,14 @@ class MonitoringService:
                 if (e.get("user") or e.get("name") or e.get("username"))
             }
 
+            expired_users = []
+            expired_vouchers = []
+
             for r in rows:
                 username = r["username"]
                 uptime_limit = r.get("uptime_limit") or "0s"
 
-                usage = self.mikrotik.get_user_usage(username) or {}
+                usage = all_usage.get(username, {})
                 current_uptime = usage.get("uptime", "0s")
 
                 try:
@@ -396,23 +403,35 @@ class MonitoringService:
                 if expired:
                     if username in active_map:
                         try:
-                            self.mikrotik.remove_active_user(username)
+                            self.mikrotik.remove_expired_user(username)
                         except Exception:
                             logger.exception(
                                 "Failed to remove %s from router", username
                             )
 
-                    self.db.execute_query(
-                        "UPDATE all_users SET is_expired = TRUE, is_active = FALSE WHERE username = %s",
-                        (username,),
-                    )
+                    expired_users.append(username)
 
                     voucher = self.db.get_voucher(username)
                     if voucher and not voucher.get("is_expired", False):
-                        self.db.execute_query(
-                            "UPDATE vouchers SET is_expired = TRUE WHERE voucher_code = %s",
-                            (username,),
-                        )
+                        expired_vouchers.append(username)
+
+            # Batch update expired users in DB
+            if expired_users:
+                placeholders = ','.join(['%s'] * len(expired_users))
+                self.db.execute_query(
+                    f"UPDATE all_users SET is_expired = TRUE, is_active = FALSE WHERE username IN ({placeholders})",
+                    tuple(expired_users),
+                )
+                logger.info(f"Marked {len(expired_users)} users as expired")
+
+            # Batch update expired vouchers
+            if expired_vouchers:
+                placeholders = ','.join(['%s'] * len(expired_vouchers))
+                self.db.execute_query(
+                    f"UPDATE vouchers SET is_expired = TRUE WHERE voucher_code IN ({placeholders})",
+                    tuple(expired_vouchers),
+                )
+                logger.info(f"Marked {len(expired_vouchers)} vouchers as expired")
 
         except Exception:
             logger.exception("check_expired_users failed")

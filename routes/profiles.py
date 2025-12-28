@@ -44,9 +44,7 @@ def init_profiles_routes(app, database_service, mikrotik_manager):
                     profile['uptime_limit'] = db_profile['uptime_limit']
                 else:
                     # Default values if not in database
-                    from services.voucher_service import VoucherService
-                    temp_service = VoucherService(None, database_service, None)
-                    profile['price'] = temp_service._calculate_price(profile_name)
+                    profile['price'] = 1000  # Default price
                     profile['time_limit'] = "24h"
                     profile['data_limit'] = "Unlimited"
                     profile['validity_period'] = 24

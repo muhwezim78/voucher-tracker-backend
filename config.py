@@ -17,7 +17,7 @@ class Config:
     MIKROTIK_CONFIG = {
         'host': os.getenv('MIKROTIK_HOST', '192.168.88.1'),
         'username': os.getenv('MIKROTIK_USERNAME', 'admin'),
-        'password': os.getenv('MIKROTIK_PASSWORD', 'kaumelinen8')
+        'password': os.getenv('MIKROTIK_PASSWORD', '')  # Set via environment variable
     }
     
     # Flask configuration
