@@ -29,13 +29,15 @@ services:
       dockerfile: Dockerfile
     container_name: voucher_backend
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       # Database Configuration
-      DB_HOST: postgres
-      DB_PORT: 5432
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME:-voucher_system}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres123}
@@ -66,6 +68,11 @@ services:
       # Admin Credentials
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      
+      # Advanced Security/Session Settings
+      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+      JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
+      SESSION_TIMEOUT_HOURS: ${SESSION_TIMEOUT_HOURS:-1}
     ports:
       - "0.0.0.0:5000:5000"
     volumes:

@@ -7,7 +7,6 @@ import os
 import time
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, g, request, make_response
-from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from config import Config
