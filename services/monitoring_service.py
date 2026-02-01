@@ -39,7 +39,7 @@ class MonitoringService:
         self.sync_interval = sync_interval
         self.active_interval = active_interval
         self.expiry_interval = expiry_interval
-        self.traffic_interval = 60 # Snapshot traffic every minute
+        self.traffic_interval = 5 # Snapshot traffic every 5 seconds for live updates
 
         self._usage_update_min_delta = usage_update_min_delta
         self._usage_update_max_age = usage_update_max_age
