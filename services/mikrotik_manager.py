@@ -124,6 +124,8 @@ class MikroTikManager:
                         "bytes-in": user.get("bytes-in", "0"),
                         "bytes-out": user.get("bytes-out", "0"),
                         "server": user.get("server", ""),
+                        "address": user.get("address", ""),
+                        "mac-address": user.get("mac-address", ""),
                     }
                 )
             return formatted_result

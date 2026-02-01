@@ -113,6 +113,8 @@ def init_users_routes(app, database_service, mikrotik_manager, auth_service=None
                     "comment": row["comment"],
                     "password_type": row["password_type"],
                     "is_voucher": bool(row["is_voucher"]),
+                    "mac_address": row.get("mac_address", ""),
+                    "ip_address": row.get("ip_address", ""),
                     "current_uptime": usage.get("uptime", "0s"),
                     "bytes_used": (
                         usage.get("bytes_in", 0) + usage.get("bytes_out", 0)
@@ -203,6 +205,8 @@ def init_users_routes(app, database_service, mikrotik_manager, auth_service=None
                 "comment": result["comment"],
                 "password_type": result["password_type"],
                 "is_voucher": bool(result["is_voucher"]),
+                "mac_address": result.get("mac_address", ""),
+                "ip_address": result.get("ip_address", ""),
                 "current_usage": usage,
                 "is_expired": is_expired,
             }

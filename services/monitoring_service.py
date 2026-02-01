@@ -429,7 +429,9 @@ class MonitoringService:
                 live_traffic_data.append({
                     "username": username,
                     "bytes_in": bytes_in,
-                    "bytes_out": bytes_out
+                    "bytes_out": bytes_out,
+                    "ip_address": entry.get("address", ""),
+                    "mac_address": entry.get("mac-address", "")
                 })
 
             # Save history to DB

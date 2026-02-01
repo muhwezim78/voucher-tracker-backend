@@ -606,8 +606,8 @@ class DatabaseService:
         """Get user information"""
         return self.execute_query(
             """
-            SELECT username, profile_name, activated_at, is_active, last_seen,
-                   uptime_limit, comment, password_type, is_voucher
+            SELECT username, profile_name, is_active, last_seen,
+                   uptime_limit, comment, password_type, is_voucher, mac_address, ip_address
             FROM all_users WHERE username=%s
             """,
             (username,),
@@ -620,7 +620,8 @@ class DatabaseService:
             self.execute_query(
                 """
             SELECT username, profile_name, is_active, last_seen,
-                   uptime_limit, comment, password_type, is_voucher
+                   uptime_limit, comment, password_type, is_voucher,
+                   mac_address, ip_address
             FROM all_users 
             ORDER BY last_seen DESC NULLS LAST, username
             """,
