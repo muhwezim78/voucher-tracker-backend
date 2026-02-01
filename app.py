@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, g
+from flask import Flask, jsonify, g, request, make_response
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
@@ -171,13 +171,30 @@ def create_app():
     )
     app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", app.config["SECRET_KEY"])
 
-    # Initialize CORS with standard settings
-    CORS(app, supports_credentials=True)
+    # --- START BULLETPROOF CORS ---
+    # We handle this manually to ensure Nginx/Proxy compatibility without modifying Nginx
+    @app.before_request
+    def handle_options_preflight():
+        if request.method == "OPTIONS":
+            res = make_response()
+            origin = request.headers.get('Origin')
+            if origin:
+                res.headers['Access-Control-Allow-Origin'] = origin
+                res.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+                res.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+                res.headers['Access-Control-Allow-Credentials'] = 'true'
+            return res, 200
 
     @app.after_request
     def add_cors_headers(response):
         origin = request.headers.get('Origin')
         if origin:
+            # Clean up any existing headers to avoid duplicates
+            response.headers.pop('Access-Control-Allow-Origin', None)
+            response.headers.pop('Access-Control-Allow-Credentials', None)
+            response.headers.pop('Access-Control-Allow-Methods', None)
+            response.headers.pop('Access-Control-Allow-Headers', None)
+            
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
@@ -186,11 +203,10 @@ def create_app():
 
     @app.before_request
     def log_request_info():
-        logger.debug('Headers: %s', request.headers)
-        logger.debug('Body: %s', request.get_data())
         origin = request.headers.get('Origin')
         if origin:
             logger.info(f"Incoming request from Origin: {origin}")
+    # --- END BULLETPROOF CORS ---
 
     # Initialize SocketIO
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
