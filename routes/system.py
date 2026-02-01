@@ -25,4 +25,4 @@ def sync_profiles():
 
 def init_system_routes(app, mikrotik_manager=None):
     """Register system blueprint"""
-    app.register_blueprint(system_bp)
+    pass

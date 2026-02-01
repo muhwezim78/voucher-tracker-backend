@@ -135,4 +135,4 @@ def init_financial_routes(app, database_service, mikrotik_manager):
             logger.error(f"Error in /financial/profile-stats: {e}")
             return jsonify({"error": str(e)}), 500
 
-    app.register_blueprint(financial_bp)
+    pass

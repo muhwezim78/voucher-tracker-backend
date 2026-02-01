@@ -114,4 +114,4 @@ def init_profiles_routes(app, database_service, mikrotik_manager):
         return jsonify({"profiles": enhanced_profiles})
 
     # Register blueprint
-    app.register_blueprint(profiles_bp)
+    pass

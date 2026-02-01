@@ -21,12 +21,19 @@ from services import (
 from services.auth_service import SubscriptionService  # Import directly
 from routes import (
     init_vouchers_routes,
+    vouchers_bp,
     init_profiles_routes,
+    profiles_bp,
     init_users_routes,
+    users_bp,
     init_financial_routes,
+    financial_bp,
     init_system_routes,
+    system_bp,
     init_pricing_routes,
+    pricing_bp,
     init_auth_routes,
+    auth_bp,
 )
 
 logging.basicConfig(
@@ -48,16 +55,19 @@ def _initialize_routes(
     """Initialize all application routes"""
 
     @app.route("/")
+    @app.route("/api")
     def root():
         return jsonify(
             {
                 "message": "MikroTik Voucher Tracker API",
                 "version": "1.0.0",
                 "status": "running",
+                "api_prefix": "/api"
             }
         )
 
     @app.route("/health")
+    @app.route("/api/health")
     def health_check():
         """Comprehensive health check endpoint"""
         try:
@@ -123,7 +133,7 @@ def _initialize_routes(
                 500,
             )
 
-    # Initialize all route modules
+    # 1. First initialize the routes (this defines the routes on the blueprints)
     init_vouchers_routes(app, voucher_service)
     init_profiles_routes(app, database_service, mikrotik_manager)
     init_users_routes(app, database_service, mikrotik_manager, auth_service)
@@ -133,6 +143,15 @@ def _initialize_routes(
     init_auth_routes(
         app, database_service, mikrotik_manager, auth_service, subscription_service
     )
+
+    # 2. THEN register the blueprints with the /api prefix
+    app.register_blueprint(vouchers_bp, url_prefix='/api')
+    app.register_blueprint(profiles_bp, url_prefix='/api')
+    app.register_blueprint(users_bp, url_prefix='/api')
+    app.register_blueprint(financial_bp, url_prefix='/api')
+    app.register_blueprint(system_bp, url_prefix='/api')
+    app.register_blueprint(pricing_bp, url_prefix='/api')
+    app.register_blueprint(auth_bp, url_prefix='/api')
 
 
 def create_app():
@@ -153,11 +172,13 @@ def create_app():
     app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", app.config["SECRET_KEY"])
 
     # Initialize CORS with full configuration for preflight requests
+    # Ensure it handles both / and /api prefixed routes
     CORS(app, 
          origins=config.CORS_ORIGINS,
          supports_credentials=True,
-         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
-         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         expose_headers=["Content-Type", "Authorization"])
 
     # Initialize SocketIO
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")

@@ -262,5 +262,4 @@ def init_vouchers_routes(app, voucher_service: VoucherService):
         except Exception as e:
             return jsonify({"error": f"PDF cleanup failed: {str(e)}"}), 500
 
-    # Register blueprint
-    app.register_blueprint(vouchers_bp)
+    pass

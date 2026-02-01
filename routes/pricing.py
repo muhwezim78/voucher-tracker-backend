@@ -19,5 +19,4 @@ def init_pricing_routes(app, database_service):
             database_service.update_pricing_rates(data['base_rates'])
             return jsonify({"message": "Pricing rates updated successfully"})
 
-    # Register blueprint
-    app.register_blueprint(pricing_bp)
+    pass

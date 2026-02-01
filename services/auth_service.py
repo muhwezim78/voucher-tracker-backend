@@ -94,6 +94,8 @@ class AuthService:
 
         @wraps(fn)
         def wrapper(*args, **kwargs):
+            if request.method == "OPTIONS":
+                return fn(*args, **kwargs)
             token = request.headers.get("Authorization", "").replace("Bearer ", "")
             if not token:
                 return (
@@ -151,6 +153,8 @@ class AuthService:
 
         @wraps(fn)
         def wrapper(*args, **kwargs):
+            if request.method == "OPTIONS":
+                return fn(*args, **kwargs)
             if not hasattr(g, "role") or g.role != "admin":
                 return (
                     jsonify(

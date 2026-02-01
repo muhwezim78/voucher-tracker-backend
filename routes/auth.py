@@ -277,6 +277,3 @@ def init_auth_routes(app, database_service, mikrotik_manager, auth_service, subs
     @app.before_request
     def before_request():
         g.database_service = db
-
-    app.register_blueprint(auth_bp)
-    logger.info("Authentication routes initialized successfully")

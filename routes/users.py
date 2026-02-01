@@ -289,5 +289,4 @@ def init_users_routes(app, database_service, mikrotik_manager, auth_service=None
             "history": history
         })
 
-    # Register blueprint
-    app.register_blueprint(users_bp)
+    pass
