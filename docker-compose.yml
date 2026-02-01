@@ -74,12 +74,8 @@ services:
       BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
       JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
       SESSION_TIMEOUT_HOURS: ${SESSION_TIMEOUT_HOURS:-1}
-    ports:
-      - "0.0.0.0:5000:5000"
     volumes:
       - ./generated_vouchers:/app/generated_vouchers
-    networks:
-      - voucher_network
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 30s
