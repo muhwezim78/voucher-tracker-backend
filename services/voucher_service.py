@@ -203,18 +203,7 @@ class VoucherService:
     def generate_single_voucher_pdf(
         self, voucher_data: Dict[str, Any]
     ) -> Optional[str]:
-        """Generate a PDF for a single voucher.
-
-        Improvements in this version:
-        - Robustly reads profile name from 'profile' or 'profile_name'.
-        - Uses price fields correctly:
-            * If `price_cents` present -> price = price_cents / 100 with currency (default "$")
-            * elif `price` present -> treat as already in major units (default currency "UGX")
-            * falls back to 0 if missing.
-          (This avoids accidental division by 100 on already-major-unit prices.)
-        - Accepts expiry from several common keys and string formats; falls back to "N/A".
-        - Safe lookups everywhere to avoid KeyError.
-        """
+        """Generate a professionally designed PDF for a single voucher."""
         try:
             if not PDF_AVAILABLE:
                 logger.warning("PDF generation not available")
@@ -230,219 +219,133 @@ class VoucherService:
             doc = SimpleDocTemplate(
                 str(filepath),
                 pagesize=A4,
-                topMargin=0.5 * inch,
-                bottomMargin=0.5 * inch,
-                leftMargin=0.5 * inch,
-                rightMargin=0.5 * inch,
+                topMargin=0.75 * inch,
+                bottomMargin=0.75 * inch,
+                leftMargin=1 * inch,
+                rightMargin=1 * inch,
             )
 
             elements = []
             styles = getSampleStyleSheet()
 
-            # Styles
-            title_style = ParagraphStyle(
-                "CustomTitle",
+            # Custom Styles
+            header_style = ParagraphStyle(
+                "HeaderStyle",
                 parent=styles["Heading1"],
-                fontSize=18,
-                spaceAfter=30,
+                fontSize=22,
                 alignment=TA_CENTER,
-                textColor=colors.darkblue,
-            )
-            content_style = ParagraphStyle(
-                "CustomContent",
-                parent=styles["Normal"],
-                fontSize=12,
-                spaceAfter=12,
-                alignment=TA_LEFT,
-            )
-            code_style = ParagraphStyle(
-                "CodeStyle",
-                parent=styles["Heading1"],
-                fontSize=24,
+                textColor=colors.white,
+                backColor=colors.darkblue,
+                borderPadding=10,
                 spaceAfter=20,
+            )
+            
+            hero_code_style = ParagraphStyle(
+                "HeroCodeStyle",
+                parent=styles["Heading1"],
+                fontSize=36,
                 alignment=TA_CENTER,
                 textColor=colors.red,
-                backColor=colors.lightgrey,
+                spaceBefore=20,
+                spaceAfter=20,
             )
 
-            # Title + Code
-            elements.append(Paragraph("INTERNET ACCESS VOUCHER", title_style))
+            label_style = ParagraphStyle(
+                "LabelStyle",
+                parent=styles["Normal"],
+                fontSize=10,
+                textColor=colors.grey,
+                alignment=TA_LEFT,
+            )
+            
+            value_style = ParagraphStyle(
+                "ValueStyle",
+                parent=styles["Normal"],
+                fontSize=12,
+                textColor=colors.black,
+                alignment=TA_LEFT,
+                fontName="Helvetica-Bold",
+            )
+
+            instr_title_style = ParagraphStyle(
+                "InstrTitle",
+                parent=styles["Heading2"],
+                fontSize=14,
+                spaceBefore=30,
+                spaceAfter=10,
+                textColor=colors.darkblue,
+            )
+
+            # Header
+            elements.append(Paragraph("WIFI ACCESS VOUCHER", header_style))
+            elements.append(Spacer(1, 0.4 * inch))
+
+            # Hero Section (Code)
+            elements.append(Paragraph("YOUR VOUCHER CODE", label_style))
+            elements.append(Paragraph(voucher_data.get('code', code_for_filename), hero_code_style))
             elements.append(Spacer(1, 0.2 * inch))
-            elements.append(Paragraph(f"CODE: {voucher_data.get('code', code_for_filename)}", code_style))
-            elements.append(Spacer(1, 0.3 * inch))
 
-            # Profile (robust)
-            profile = (
-                voucher_data.get("profile")
-                or voucher_data.get("profile_name")
-                or (voucher_data.get("profile_info") and voucher_data["profile_info"].get("name"))
-                or "N/A"
-            )
-
-            # Price handling (avoid wrong division by 100 when price already in major units)
-            currency = voucher_data.get("currency")
-            price_value = None
-            if "price_cents" in voucher_data and voucher_data["price_cents"] is not None:
-                # explicit cents provided -> convert to major currency units
-                try:
-                    cents = float(voucher_data["price_cents"])
-                    price_value = cents / 100.0
-                    currency = currency or voucher_data.get("currency", "$")
-                except Exception:
-                    price_value = None
-            elif "price" in voucher_data and voucher_data["price"] is not None:
-                # assume price is already in major units (e.g., UGX, or dollars).
-                try:
-                    price_value = float(voucher_data["price"])
-                    currency = currency or voucher_data.get("currency", "UGX")
-                except Exception:
-                    price_value = None
-            else:
-                # try nested profile price
-                profile_info = voucher_data.get("profile_info") or {}
-                if profile_info and ("price" in profile_info or "price_cents" in profile_info):
-                    if "price_cents" in profile_info:
-                        try:
-                            price_value = float(profile_info["price_cents"]) / 100.0
-                            currency = currency or profile_info.get("currency", "$")
-                        except Exception:
-                            price_value = None
-                    else:
-                        try:
-                            price_value = float(profile_info.get("price", 0))
-                            currency = currency or profile_info.get("currency", "UGX")
-                        except Exception:
-                            price_value = None
-
-            # Format price string sensibly
-            if price_value is None:
-                price_str = "N/A"
-            else:
-                # if currency looks like a symbol, prefix; else suffix
-                if currency in ("$", "€", "£"):
-                    price_str = f"{currency}{price_value:,.2f}"
-                else:
-                    # Assume currency is a code like UGX, KES, etc.
-                    # Show no decimals for large whole-unit currencies like UGX
-                    if price_value == int(price_value) and price_value >= 1:
-                        price_str = f"{int(price_value):,} {currency}"
-                    else:
-                        price_str = f"{price_value:,.2f} {currency}"
-
-            # Password handling (display-friendly)
-            # voucher may contain 'password', or a password_type & no password (blank/same)
-            password_display = voucher_data.get("password")
-            if not password_display:
-                ptype = voucher_data.get("password_type", "blank")
-                if ptype == "same":
-                    password_display = "same as username"
-                elif ptype == "custom":
-                    # if type says custom but no password field present, indicate so
-                    password_display = voucher_data.get("password", "custom (hidden)")
-                else:
-                    password_display = "blank"
-
-            # Expiry handling (try multiple keys and formats)
-            expiry_raw = (
-                voucher_data.get("expiry_time")
-                or voucher_data.get("expiry")
-                or voucher_data.get("expires_at")
-                or voucher_data.get("expiry_datetime")
-                or voucher_data.get("valid_until")
-            )
-            expiry_str = "N/A"
-            if expiry_raw:
-                # If it's already a datetime-like object, format it
-                if hasattr(expiry_raw, "strftime"):
-                    try:
-                        expiry_str = expiry_raw.strftime("%Y-%m-%d %H:%M")
-                    except Exception:
-                        expiry_str = str(expiry_raw)
-                else:
-                    # If string, try ISO parse then common formats
-                    if isinstance(expiry_raw, str):
-                        parsed = None
-                        try:
-                            # try ISO first
-                            parsed = datetime.fromisoformat(expiry_raw)
-                        except Exception:
-                            # try several common formats
-                            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%d-%m-%Y %H:%M"):
-                                try:
-                                    parsed = datetime.strptime(expiry_raw, fmt)
-                                    break
-                                except Exception:
-                                    parsed = None
-                        if parsed:
-                            expiry_str = parsed.strftime("%Y-%m-%d %H:%M")
-                        else:
-                            expiry_str = expiry_raw  # fallback to raw string
-                    else:
-                        # Fallback: just convert to string
-                        expiry_str = str(expiry_raw)
-
-            # Uptime limit (safe)
+            # Details Setup
+            profile = voucher_data.get("profile") or voucher_data.get("profile_name") or "N/A"
             uptime_limit = voucher_data.get("uptime_limit") or voucher_data.get("limit") or "N/A"
+            
+            # Price handling
+            price_val = voucher_data.get("price", 0)
+            currency = voucher_data.get("currency", "UGX")
+            price_str = f"{price_val:,.0f} {currency}" if price_val else "N/A"
 
-            # Build details table
-            details_data = [
-                ["Profile:", profile],
-                ["Uptime Limit:", uptime_limit],
-                ["Password:", password_display],
-                ["Expiry:", expiry_str],
-                ["Price:", price_str],
+            # Details Table (Clean layout)
+            data = [
+                [Paragraph("<b>Duration</b>", label_style), Paragraph("<b>Price</b>", label_style)],
+                [Paragraph(uptime_limit, value_style), Paragraph(price_str, value_style)],
+                [Spacer(1, 0.1 * inch), Spacer(1, 0.1 * inch)],
+                [Paragraph("<b>Profile</b>", label_style), Paragraph("<b>Package Details</b>", label_style)],
+                [Paragraph(profile, value_style), Paragraph("High Speed Internet Access", value_style)],
             ]
 
-            # Optional customer fields - keep top ordering
-            if voucher_data.get("customer_name"):
-                details_data.insert(0, ["Customer:", voucher_data.get("customer_name")])
-            if voucher_data.get("customer_contact"):
-                # if customer_name present, contact becomes second row; else first
-                insert_pos = 1 if voucher_data.get("customer_name") else 0
-                details_data.insert(insert_pos, ["Contact:", voucher_data.get("customer_contact")])
-
-            table = Table(details_data, colWidths=[2 * inch, 3 * inch])
-            table.setStyle(
-                TableStyle(
-                    [
-                        ("FONT", (0, 0), (-1, -1), "Helvetica", 10),
-                        ("BACKGROUND", (0, 0), (0, -1), colors.lightgrey),
-                        ("ALIGN", (0, 0), (0, -1), "RIGHT"),
-                        ("ALIGN", (1, 0), (1, -1), "LEFT"),
-                        ("GRID", (0, 0), (-1, -1), 1, colors.black),
-                        ("PADDING", (0, 0), (-1, -1), 6),
-                    ]
-                )
-            )
-
+            table = Table(data, colWidths=[2.5 * inch, 2.5 * inch])
+            table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LINEBELOW', (0, 1), (-1, 1), 0.5, colors.lightgrey),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ]))
             elements.append(table)
-            elements.append(Spacer(1, 0.3 * inch))
 
             # Instructions
-            instructions = [
-                "INSTRUCTIONS:",
-                "1. Connect to the WiFi network.",
-                "2. Open your browser and go to the hotspot login page.",
-                "3. Enter the voucher code and password.",
-                "4. Click Login to start your session.",
+            elements.append(Paragraph("HOW TO CONNECT", instr_title_style))
+            
+            step_style = ParagraphStyle("StepStyle", parent=styles["Normal"], fontSize=11, spaceAfter=8, bulletIndent=10)
+            steps = [
+                "1. Connect to the <b>WiFi Hotspot</b> network on your device.",
+                "2. The login page should open automatically (or visit any website).",
+                "3. Enter your unique <b>Voucher Code</b> shown above.",
+                "4. Click <b>Login</b> to start enjoying your internet session!"
             ]
-            for instruction in instructions:
-                elements.append(Paragraph(instruction, content_style))
+            for step in steps:
+                elements.append(Paragraph(step, step_style))
 
             # Footer
-            elements.append(Spacer(1, 0.5 * inch))
-            gen_on = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            elements.append(Paragraph(f"Generated on: {gen_on}", content_style))
+            elements.append(Spacer(1, 1 * inch))
+            footer_data = [
+                [Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", label_style),
+                 Paragraph("Thank you for using our service!", label_style)]
+            ]
+            footer_table = Table(footer_data, colWidths=[3 * inch, 3 * inch])
+            footer_table.setStyle(TableStyle([
+                ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+                ('TOPPADDING', (0, 0), (-1, -1), 10),
+                ('LINEABOVE', (0, 0), (-1, 0), 0.5, colors.grey),
+            ]))
+            elements.append(footer_table)
 
             # Build PDF
             doc.build(elements)
-            logger.info(f"PDF generated: {filepath}")
+            logger.info(f"Redesigned Single PDF generated: {filepath}")
             return str(filepath)
 
         except Exception as e:
-            logger.error(
-                f"Error generating PDF for voucher {voucher_data.get('code', voucher_data.get('voucher_code', 'UNKNOWN'))}: {e}"
-            )
+            logger.error(f"Error generating redesigned PDF: {e}")
             return None
 
 
@@ -573,134 +476,99 @@ class VoucherService:
             return None
 
     def _create_voucher_card(self, voucher: Dict[str, Any]) -> Paragraph:
-        """Create a formatted voucher card for grid display"""
+        """Create a professional, high-contrast voucher card for batch printing."""
         try:
-            # Get voucher data with safe access
-            voucher_code = voucher.get("code") or voucher.get("voucher_code", "N/A")
-            profile = voucher.get("profile") or voucher.get("profile_name", "N/A")
-            uptime_limit = voucher.get("uptime_limit", "N/A")
-
-            # Handle password type
-            password_type = voucher.get("password_type", "blank")
-            password_display = "No Password"
-            if password_type == "same":
-                password_display = "Same as Username"
-            elif password_type == "custom":
-                password_display = "Custom Password"
-
-            # Handle expiry time
-            expiry_time = voucher.get("expiry_time", "N/A")
-            if hasattr(expiry_time, "strftime"):
-                expiry_display = expiry_time.strftime("%m/%d %H:%M")
-            else:
-                expiry_display = str(expiry_time)
-                if len(expiry_display) > 10:
-                    expiry_display = expiry_display[:10]
-
-            # Create formatted voucher card content
-            card_content = f"""
-        <b><font size="9" color="darkblue">╔══════════════╗</font></b><br/>
-        <b><font size="10">{voucher_code}</font></b><br/>
-        <font size="6"><b>Profile:</b> {profile}</font><br/>
-        <font size="6"><b>Limit:</b> {uptime_limit}</font><br/>
-        <font size="6"><b>Password:</b> {password_display}</font><br/>
-        <font size="6"><b>Expires:</b> {expiry_display}</font><br/>
-        <b><font size="9" color="darkblue">╚══════════════╝</font></b>
+            # Data normalization
+            code = voucher.get("code") or voucher.get("voucher_code", "N/A")
+            limit = voucher.get("uptime_limit") or voucher.get("limit") or "N/A"
+            
+            # Formatted content using ReportLab-friendly HTML-like tags
+            # We use a clean, bold layout without ASCII boxes
+            card_html = f"""
+            <para align="center">
+                <b><font size="12" color="darkblue">WIFI ACCESS</font></b><br/>
+                <font size="14" color="red"><b>{code}</b></font><br/>
+                <font size="8" color="black"><b>Duration:</b> {limit}</font><br/>
+                <font size="7" color="grey"><i>Use at any hotspot location</i></font>
+            </para>
             """
 
-            # Create paragraph style for the voucher card
             card_style = ParagraphStyle(
-                "VoucherCard",
+                "BatchCardStyle",
                 parent=getSampleStyleSheet()["Normal"],
-                fontSize=6,
-                leading=8,
                 alignment=TA_CENTER,
-                textColor=colors.black,
-                borderPadding=4,
-                leftIndent=0,
-                rightIndent=0,
-                spaceBefore=2,
-                spaceAfter=2,
+                leading=12,
+                borderPadding=5,
             )
 
-            return Paragraph(card_content, card_style)
+            return Paragraph(card_html, card_style)
 
         except Exception as e:
-            logger.error(f"Error creating voucher card: {e}")
-            return Paragraph(
-                "Error generating voucher", getSampleStyleSheet()["Normal"]
-            )
+            logger.error(f"Error creating batch voucher card: {e}")
+            return Paragraph("Error", getSampleStyleSheet()["Normal"])
+
 
     def generate_voucher_card_pdf(self, voucher_data: Dict[str, Any]) -> Optional[str]:
-        """Generate a fancy voucher card style PDF"""
+        """Generate a premium, fancy landscape-style voucher card."""
         try:
             if not PDF_AVAILABLE:
                 return None
 
-            filename = f"voucher_card_{voucher_data['code']}.pdf"
+            filename = f"voucher_card_{voucher_data.get('code', 'UNKNOWN')}.pdf"
             filepath = self.pdf_output_dir / filename
 
-            # Create PDF with canvas for more control
             c = canvas.Canvas(str(filepath), pagesize=landscape(letter))
             width, height = landscape(letter)
 
-            # Background
-            c.setFillColor(colors.lightblue)
+            # Elegant Background Gradient (Simulated with layers)
+            c.setFillColor(colors.HexColor("#F0F4F8"))
             c.rect(0, 0, width, height, fill=1)
+            
+            # Highlight Bar
+            c.setFillColor(colors.darkblue)
+            c.rect(0, height - 100, width, 100, fill=1)
 
             # Border
             c.setStrokeColor(colors.darkblue)
-            c.setLineWidth(3)
-            c.rect(20, 20, width - 40, height - 40, stroke=1, fill=0)
+            c.setLineWidth(2)
+            c.rect(40, 40, width - 80, height - 80, stroke=1, fill=0)
 
-            # Title
-            c.setFillColor(colors.darkblue)
-            c.setFont("Helvetica-Bold", 24)
-            c.drawCentredString(width / 2, height - 80, "INTERNET ACCESS VOUCHER")
-
-            # Voucher Code (big and centered)
-            c.setFillColor(colors.red)
-            c.setFont("Helvetica-Bold", 32)
-            c.drawCentredString(width / 2, height - 150, voucher_data["code"])
-
-            # Details box
+            # Title - High visibility
             c.setFillColor(colors.white)
-            c.rect(50, height - 300, width - 100, 200, fill=1)
+            c.setFont("Helvetica-Bold", 30)
+            c.drawCentredString(width / 2, height - 65, "WIFI ACCESS VOUCHER")
+
+            # Main Code Display
             c.setFillColor(colors.black)
+            c.setFont("Helvetica", 14)
+            c.drawCentredString(width / 2, height - 160, "YOUR ACCESS CODE")
+            
+            c.setFillColor(colors.red)
+            c.setFont("Helvetica-Bold", 60)
+            c.drawCentredString(width / 2, height - 230, voucher_data.get("code", "N/A"))
 
-            y_position = height - 120
-            details = [
-                ("Profile:", voucher_data["profile"]),
-                ("Uptime Limit:", voucher_data["uptime_limit"]),
-                ("Password:", voucher_data["password"]),
-                ("Expiry:", voucher_data["expiry_time"].strftime("%Y-%m-%d %H:%M")),
-            ]
+            # Bottom Info Bar
+            c.setFillColor(colors.darkblue)
+            c.rect(100, 100, width - 200, 60, fill=1)
+            
+            c.setFillColor(colors.white)
+            c.setFont("Helvetica-Bold", 18)
+            limit = voucher_data.get("uptime_limit") or "Unlimited"
+            c.drawCentredString(width / 2, 125, f"VALIDITY: {limit}")
 
-            c.setFont("Helvetica-Bold", 14)
-            for label, value in details:
-                c.drawString(100, y_position, label)
-                c.setFont("Helvetica", 14)
-                c.drawString(250, y_position, str(value))
-                c.setFont("Helvetica-Bold", 14)
-                y_position -= 30
-
-            # Instructions
-            c.setFont("Helvetica", 10)
-            instructions = [
-                "Instructions: Connect to WiFi -> Open browser -> Enter code -> Enjoy!"
-            ]
-
-            y_position = 100
-            for instruction in instructions:
-                c.drawString(100, y_position, instruction)
-                y_position -= 20
+            # Instructions - Modern floating style
+            c.setFillColor(colors.black)
+            c.setFont("Helvetica-Oblique", 11)
+            c.drawCentredString(width / 2, 80, "Connect to Hotspot • Enter Code • Enjoy High Speed Internet")
 
             c.save()
+            logger.info(f"Fancy Voucher Card generated: {filepath}")
             return str(filepath)
 
         except Exception as e:
-            logger.error(f"Error generating voucher card PDF: {e}")
+            logger.error(f"Error generating fancy voucher card: {e}")
             return None
+
 
     def _determine_password(
         self, password_type: str, voucher_code: str

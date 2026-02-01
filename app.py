@@ -126,7 +126,7 @@ def _initialize_routes(
     # Initialize all route modules
     init_vouchers_routes(app, voucher_service)
     init_profiles_routes(app, database_service, mikrotik_manager)
-    init_users_routes(app, database_service, mikrotik_manager)
+    init_users_routes(app, database_service, mikrotik_manager, auth_service)
     init_financial_routes(app, database_service, mikrotik_manager)
     init_system_routes(app, mikrotik_manager)
     init_pricing_routes(app, database_service)

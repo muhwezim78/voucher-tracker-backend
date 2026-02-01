@@ -1,4 +1,5 @@
 import psycopg2
+from psycopg2 import pool
 from psycopg2.extras import RealDictCursor, execute_batch
 import logging
 from typing import List, Dict, Any, Optional
@@ -16,65 +17,55 @@ import random
 
 logger = logging.getLogger(__name__)
 
-
 class DatabaseService:
     def __init__(self, config: Config):
         self.config = config
         self.db_lock = threading.Lock()
-        self._connection_pool = []
-        self._max_pool_size = 10  # Increased for more workers
-        self._pool_lock = threading.Lock()
         
+        # Initialize ThreadedConnectionPool
+        self._min_conn = 1
+        self._max_conn = 20
+        try:
+            self.pool = psycopg2.pool.ThreadedConnectionPool(
+                self._min_conn,
+                self._max_conn,
+                **self.config.DB_CONFIG
+            )
+            logger.info(f"Database connection pool initialized (min={self._min_conn}, max={self._max_conn})")
+        except Exception as e:
+            logger.critical(f"Failed to initialize database connection pool: {e}")
+            raise e
+
         # Caching logic
         self._profile_cache = {}
         self._cache_lock = threading.Lock()
         self._cache_ttl = 300  # 5 minutes cache TTL
         self._last_cache_cleanup = time.time()
         
-        logger.info("DatabaseService initialized with connection pooling and caching")
+        logger.info("DatabaseService initialized with threaded connection pooling and caching")
 
     @contextmanager
     def get_connection(self):
         """Get database connection from pool with context manager"""
         conn = None
-        with self._pool_lock:
-            if self._connection_pool:
-                conn = self._connection_pool.pop()
-            else:
-                conn = self._create_connection()
-
         try:
+            conn = self.pool.getconn()
+            conn.autocommit = False
             yield conn
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error getting connection from pool: {e}")
             if conn:
                 conn.rollback()
             raise
         finally:
             if conn:
-                # Return to pool if healthy, otherwise close
+                # Rollback uncommitted transactions before returning to pool
+                # to ensure clean state for next user
                 try:
-                    with self._pool_lock:
-                        if (
-                            len(self._connection_pool) < self._max_pool_size
-                            and conn.closed == 0
-                        ):
-                            self._connection_pool.append(conn)
-                        else:
-                            conn.close()
-                except Exception as e:
-                    logger.warning(f"Error returning connection to pool: {e}")
-                    if not conn.closed:
-                        conn.close()
-
-    def _create_connection(self):
-        """Create new database connection with optimized settings"""
-        try:
-            conn = psycopg2.connect(**self.config.DB_CONFIG)
-            conn.autocommit = False
-            return conn
-        except Exception as e:
-            logger.error(f"Failed to create database connection: {e}")
-            raise
+                    conn.rollback()
+                except Exception:
+                    pass
+                self.pool.putconn(conn)
 
     def execute_query(
         self,
@@ -97,9 +88,11 @@ class DatabaseService:
 
                     result = None
                     if fetch_one:
-                        result = cursor.fetchone()
+                        if cursor.description: # check if query returns rows
+                             result = cursor.fetchone()
                     elif fetch:
-                        result = cursor.fetchall()
+                         if cursor.description:
+                            result = cursor.fetchall()
 
                     conn.commit()
 
@@ -112,8 +105,9 @@ class DatabaseService:
 
                     return result
             except Exception as e:
-                if conn:
-                    conn.rollback()
+                # conn rollback handled by context manager on exception if needed
+                # but explicit rollback here is safer before re-raising
+                conn.rollback()
                 logger.error(f"Database error in query '{query[:50]}...': {e}")
                 raise
 
@@ -183,7 +177,9 @@ class DatabaseService:
                 is_expired BOOLEAN DEFAULT FALSE,
                 comment TEXT,
                 password_type TEXT,
-                is_voucher BOOLEAN DEFAULT FALSE
+                is_voucher BOOLEAN DEFAULT FALSE,
+                mac_address TEXT,
+                ip_address TEXT
             )
             """,
             """
@@ -233,13 +229,22 @@ class DatabaseService:
             )""",
             """CREATE TABLE IF NOT EXISTS user_verifications (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id),
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                 code TEXT NOT NULL,
                 type TEXT NOT NULL DEFAULT 'EMAIL',  -- or SMS
                 expires_at TIMESTAMP NOT NULL,
                 used BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""",
+            """
+            CREATE TABLE IF NOT EXISTS user_traffic_history (
+                id SERIAL PRIMARY KEY,
+                username TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                upload_bytes BIGINT DEFAULT 0,
+                download_bytes BIGINT DEFAULT 0
+            )
+            """,
         ]
 
         # Create tables
@@ -257,6 +262,8 @@ class DatabaseService:
             "CREATE INDEX IF NOT EXISTS idx_users_active ON all_users(is_active)",
             "CREATE INDEX IF NOT EXISTS idx_users_last_seen ON all_users(last_seen)",
             "CREATE INDEX IF NOT EXISTS idx_users_activated ON all_users(activated_at)",
+            "CREATE INDEX IF NOT EXISTS idx_users_mac ON all_users(mac_address)",
+            "CREATE INDEX IF NOT EXISTS idx_users_ip ON all_users(ip_address)",
             "CREATE INDEX IF NOT EXISTS idx_profiles_name ON bandwidth_profiles(name)",
             "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
             "CREATE INDEX IF NOT EXISTS idx_users_user_id ON users(user_id)",
@@ -266,6 +273,8 @@ class DatabaseService:
             "CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token)",
             "CREATE INDEX IF NOT EXISTS idx_user_verifications_user_id ON user_verifications(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_user_verifications_code ON user_verifications(code)",
+            "CREATE INDEX IF NOT EXISTS idx_traffic_history_username ON user_traffic_history(username)",
+            "CREATE INDEX IF NOT EXISTS idx_traffic_history_timestamp ON user_traffic_history(timestamp)",
         ]
 
         for query in index_queries:
@@ -362,6 +371,147 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Error adding profile: {e}")
             return False
+
+    # ---------------------------------------------------------
+    # PROFILE SYNC OPERATIONS
+    # ---------------------------------------------------------
+    def sync_profiles_from_mikrotik(self, mikrotik_manager: MikroTikManager) -> Tuple[bool, str]:
+        """Fetch profiles from MikroTik and upsert into database with smart pricing/metadata detection"""
+        import re
+        try:
+            mt_profiles = mikrotik_manager.get_profiles()
+            if not mt_profiles:
+                return True, "No profiles found on MikroTik"
+
+            rates = self.get_pricing_rates()
+            
+            for p in mt_profiles:
+                name = p.get("name", "")
+                if not name or name == "default":
+                    continue
+
+                rate_limit = p.get("rate-limit", "")
+                session_timeout = p.get("session-timeout", "00:00:00")
+                
+                # Default values
+                uptime_limit = "1d"
+                price = 0
+
+                # 1. SMART PARSING: Try to extract from name first (e.g., ...-co:1000...-ut:1d...)
+                cost_match = re.search(r'-co:(\d+)', name)
+                # Robustly match the uptime pattern until the next dash or end of string
+                # Patterns: -ut:1d 00:00:00, -ut:0d 01:00:00, -ut:7d, etc.
+                uptime_match = re.search(r'-ut:([\w :]+)(?=-|$)', name)
+
+                if cost_match:
+                    price = int(cost_match.group(1))
+                
+                if uptime_match:
+                    raw_uptime = uptime_match.group(1).strip()
+                    # Normalize raw_uptime (e.g., '1d 00:00:00' -> '1d', '0d 01:00:00' -> '1h')
+                    if raw_uptime.startswith("0d "):
+                        # Try to get hours
+                        h_match = re.search(r'0d (\d{1,2}):', raw_uptime)
+                        if h_match:
+                            uptime_limit = f"{int(h_match.group(1))}h"
+                        else:
+                            uptime_limit = "1h" # Fallback
+                    elif " " in raw_uptime:
+                        uptime_limit = raw_uptime.split(" ")[0]
+                    else:
+                        uptime_limit = raw_uptime
+                else:
+                    # 2. FALLBACK: Normalizing MikroTik session-timeout
+                    if "1d" in session_timeout or "24:00:00" in session_timeout:
+                        uptime_limit = "1d"
+                    elif "7d" in session_timeout or "168:00:00" in session_timeout:
+                        uptime_limit = "7d"
+                    elif "30d" in session_timeout or "720:00:00" in session_timeout:
+                        uptime_limit = "30d"
+                    elif "01:00:00" in session_timeout:
+                        uptime_limit = "1h"
+
+                # 3. PRICE FALLBACK: If price from name is 0, use global rates
+                if price <= 0:
+                    if "1d" in uptime_limit:
+                        price = rates.get("day", 1000)
+                    elif "7d" in uptime_limit:
+                        price = rates.get("week", 6000)
+                    elif "30d" in uptime_limit:
+                        price = rates.get("month", 25000)
+                    elif "1h" in uptime_limit:
+                        price = rates.get("hour", 500)
+                    else:
+                        price = rates.get("day", 1000)
+
+                # Upsert into bandwidth_profiles
+                self.execute_query(
+                    """
+                    INSERT INTO bandwidth_profiles (name, rate_limit, uptime_limit, price, description)
+                    VALUES (%s, %s, %s, %s, 'Synced from MikroTik')
+                    ON CONFLICT (name) DO UPDATE SET
+                        rate_limit = EXCLUDED.rate_limit,
+                        uptime_limit = EXCLUDED.uptime_limit,
+                        price = EXCLUDED.price
+                    """,
+                    (name, rate_limit, uptime_limit, price)
+                )
+
+            # Invalidate cache
+            with self._cache_lock:
+                self._profile_cache.clear()
+
+            return True, f"Synced {len(mt_profiles)} profiles with automatic metadata detection"
+        except Exception as e:
+            logger.error(f"Profile sync failed: {e}")
+            return False, str(e)
+
+
+
+    # ---------------------------------------------------------
+    # TRAFFIC HISTORY OPERATIONS
+    # ---------------------------------------------------------
+    def split_history_args(self, username, period):
+        return username, period # dummy helper if needed
+
+    def record_traffic_snapshot(self, snapshots: List[Dict[str, Any]]):
+        """Batch insert traffic history"""
+        if not snapshots:
+            return
+
+        batch_data = []
+        for s in snapshots:
+            batch_data.append((
+                s["username"],
+                s["timestamp"],
+                s["bytes_in"], # upload (from router perspective, in is from client... wait. MT 'bytes-in' is FROM client TO router = upload)
+                s["bytes_out"] # download
+            ))
+            
+        try:
+            self.execute_query(
+                """
+                INSERT INTO user_traffic_history (username, timestamp, upload_bytes, download_bytes)
+                VALUES (%s, %s, %s, %s)
+                """,
+                batch_data=batch_data
+            )
+        except Exception as e:
+            logger.error(f"Failed to record traffic snapshots: {e}")
+
+    def get_user_traffic_history(self, username: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get traffic history for a user"""
+        return self.execute_query(
+            """
+            SELECT timestamp, upload_bytes, download_bytes
+            FROM user_traffic_history
+            WHERE username = %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+            """,
+            (username, limit),
+            fetch=True
+        ) or []
 
     # ---------------------------------------------------------
     # VOUCHER OPERATIONS (OPTIMIZED)
@@ -574,7 +724,7 @@ class DatabaseService:
     def record_voucher_activation(self, username: str, uptime_seconds: int):
         """
         When a user's voucher starts being used (uptime > 1s), record payment and mark voucher as used.
-        Optimized to check conditions early.
+        Prioritizes profile-specific pricing over global rates.
         """
         if uptime_seconds <= 1:
             return  # Ignore idle
@@ -597,31 +747,42 @@ class DatabaseService:
         if existing_tx:
             return  # Already processed
 
-        uptime_limit = user.get("uptime_limit", "1d")
-        rates = self.get_pricing_rates()
+        # Logic: 1. Try to get price from the profile first
+        profile_name = user.get("profile_name")
+        amount = 0
+        if profile_name:
+            profile = self.get_profile(profile_name)
+            if profile:
+                amount = profile.get("price", 0)
 
-        # Determine amount based on uptime limit
-        if "1d" in uptime_limit or uptime_limit == "24h":
-            amount = rates.get("day", 1000)
-        elif "7d" in uptime_limit:
-            amount = rates.get("week", 6000)
-        elif "30d" in uptime_limit:
-            amount = rates.get("month", 25000)
-        else:
-            amount = rates.get("day", 1000)
+        # 2. Fallback to global pricing rates based on duration
+        if amount <= 0:
+            uptime_limit = user.get("uptime_limit", "1d")
+            rates = self.get_pricing_rates()
 
-        # Use batch operations for related updates
+            if "1d" in uptime_limit or uptime_limit == "24h":
+                amount = rates.get("day", 1000)
+            elif "7d" in uptime_limit:
+                amount = rates.get("week", 6000)
+            elif "30d" in uptime_limit:
+                amount = rates.get("month", 25000)
+            else:
+                amount = rates.get("day", 1000)
+
+        # Record the transaction
         self.mark_voucher_used(username)
 
         transaction = FinancialTransaction(
             voucher_code=username, amount=amount, transaction_type="SALE"
         )
         self.add_transaction(transaction)
-        logger.info(f"Recorded SALE for {username} — {amount} UGX")
+        logger.info(f"Recorded SALE for {username} — {amount} UGX (Profile: {profile_name})")
+
 
     def record_active_users(self, active_users: List[Dict[str, Any]]):
         """
         Record active MikroTik users in the database with batch operations.
+        Includes MAC and IP address tracking.
         """
         if not active_users:
             return
@@ -645,6 +806,9 @@ class DatabaseService:
 
             profile_name = u.get("profile_name", "default")
             uptime_str = u.get("uptime", "0")
+            mac_address = u.get("mac_address") or u.get("mac-address") or ""
+            ip_address = u.get("address") or u.get("ip_address") or ""
+            
             try:
                 uptime_seconds = int(uptime_str)
             except (TypeError, ValueError):
@@ -652,7 +816,7 @@ class DatabaseService:
 
             uptime_limit = profile_uptimes.get(profile_name, "1d")
 
-            upsert_data.append((username, profile_name, True, uptime_limit))
+            upsert_data.append((username, profile_name, True, uptime_limit, mac_address, ip_address))
 
             if uptime_seconds > 1:
                 activation_data.append((username, uptime_seconds))
@@ -661,12 +825,14 @@ class DatabaseService:
         if upsert_data:
             self.execute_query(
                 """
-                INSERT INTO all_users (username, profile_name, is_active, uptime_limit, last_seen)
-                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                INSERT INTO all_users (username, profile_name, is_active, uptime_limit, mac_address, ip_address, last_seen)
+                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                 ON CONFLICT (username) DO UPDATE SET
                     profile_name = EXCLUDED.profile_name,
                     is_active = EXCLUDED.is_active,
                     uptime_limit = EXCLUDED.uptime_limit,
+                    mac_address = EXCLUDED.mac_address,
+                    ip_address = EXCLUDED.ip_address,
                     last_seen = CURRENT_TIMESTAMP
                 """,
                 batch_data=upsert_data,
@@ -675,6 +841,7 @@ class DatabaseService:
         # Process activations
         for username, uptime_seconds in activation_data:
             self.record_voucher_activation(username, uptime_seconds)
+
 
     def _get_profile_uptime(self, profile_name: str) -> str:
         """Get profile uptime with caching"""

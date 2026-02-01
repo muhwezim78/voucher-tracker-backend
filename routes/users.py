@@ -8,7 +8,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 users_bp = Blueprint("users", __name__)
 
 
-def init_users_routes(app, database_service, mikrotik_manager):
+def init_users_routes(app, database_service, mikrotik_manager, auth_service=None):
     """Initialize user routes"""
 
     def paginate_results(results, page, per_page, endpoint_name):
@@ -252,8 +252,34 @@ def init_users_routes(app, database_service, mikrotik_manager):
         if email != admin_email or not check_password_hash(admin_password_hash, password):
             return jsonify({"error": "Invalid credentials"}), 401
 
-        # Successful login
-        return jsonify({"message": "Login successful", "user": email})
+        # Successful login - Create a temporary JWT for the admin
+        token = None
+        if auth_service:
+            # We use a special ID "admin-env" to denote this admin came from environment variables
+            token = auth_service.create_jwt(uid="admin-env", role="admin")
+
+        return jsonify({
+            "success": True,
+            "message": "Login successful", 
+            "user": {
+                "email": email,
+                "role": "admin"
+            },
+            "token": token
+        })
+
+    @users_bp.route("/users/<username>/traffic")
+    def get_user_traffic_history(username):
+        """Get traffic history for a user"""
+        limit = request.args.get("limit", 100, type=int)
+        
+        history = database_service.get_user_traffic_history(username, limit)
+        
+        return jsonify({
+            "username": username,
+            "period": "history", # consistent with other monitoring APIs
+            "history": history
+        })
 
     # Register blueprint
     app.register_blueprint(users_bp)

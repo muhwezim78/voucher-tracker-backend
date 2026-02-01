@@ -39,8 +39,10 @@ class MonitoringService:
         self.sync_interval = sync_interval
         self.active_interval = active_interval
         self.expiry_interval = expiry_interval
+        self.traffic_interval = 60 # Snapshot traffic every minute
 
         self._usage_update_min_delta = usage_update_min_delta
+        self._usage_update_max_age = usage_update_max_age
         self._usage_update_max_age = usage_update_max_age
 
         # usage cache: { username: { "bytes": int, "ts": datetime } }
@@ -69,15 +71,19 @@ class MonitoringService:
         self._threads["expiry"] = threading.Thread(
             target=self._expiry_worker, daemon=True
         )
+        self._threads["traffic"] = threading.Thread(
+            target=self._traffic_worker, daemon=True
+        )
 
         for t in self._threads.values():
             t.start()
 
         logger.info(
-            "Monitoring service started (sync=%ss active=%ss expiry=%ss)",
+            "Monitoring service started (sync=%ss active=%ss expiry=%ss traffic=%ss)",
             self.sync_interval,
             self.active_interval,
             self.expiry_interval,
+            self.traffic_interval,
         )
 
     def stop_monitoring(self):
@@ -96,18 +102,39 @@ class MonitoringService:
     def _sync_worker(self):
         while not self._stop_event.is_set():
             try:
+                # 1. Sync Bandwidth Profiles with Smart Pricing
+                logger.info("Starting periodic profile sync...")
+                success, msg = self.db.sync_profiles_from_mikrotik(self.mikrotik)
+                if success:
+                    logger.info(f"Profile sync successful: {msg}")
+                
+                # 2. Sync Static Users
                 self.sync_all_users()
             except Exception as e:
-                logger.exception("Error in sync_all_users: %s", e)
+                logger.exception("Error in _sync_worker: %s", e)
             self._wait_or_stop(self.sync_interval)
 
     def _active_worker(self):
         while not self._stop_event.is_set():
             try:
-                self.monitor_active_users()
+                # Use the optimized record_active_users logic
+                active_entries = self.mikrotik.get_active_users() or []
+                if active_entries:
+                    self.db.record_active_users(active_entries)
+                    
+                    # Still need to update statuses for those who went offline
+                    active_usernames = {e.get("user") or e.get("name") or e.get("username") for e in active_entries}
+                    active_usernames.discard(None)
+                    
+                    # Update is_active=False for those not in the list
+                    self.db.execute_query(
+                        "UPDATE all_users SET is_active = FALSE WHERE is_active = TRUE AND username != ALL(%s)",
+                        (list(active_usernames),)
+                    )
             except Exception as e:
-                logger.exception("Error in monitor_active_users: %s", e)
+                logger.exception("Error in _active_worker: %s", e)
             self._wait_or_stop(self.active_interval)
+
 
     def _expiry_worker(self):
         while not self._stop_event.is_set():
@@ -116,6 +143,14 @@ class MonitoringService:
             except Exception as e:
                 logger.exception("Error in check_expired_users: %s", e)
             self._wait_or_stop(self.expiry_interval)
+
+    def _traffic_worker(self):
+        while not self._stop_event.is_set():
+            try:
+                self.snapshot_traffic()
+            except Exception as e:
+                logger.exception("Error in snapshot_traffic: %s", e)
+            self._wait_or_stop(self.traffic_interval)
 
     def _wait_or_stop(self, seconds: int):
         """Wait but exit early if stop event set."""
@@ -223,97 +258,6 @@ class MonitoringService:
         except Exception:
             logger.exception("sync_all_users failed")
 
-    def monitor_active_users(self):
-        """Monitor active users and handle voucher activations."""
-        try:
-            active_entries = self.mikrotik.get_active_users() or []
-            active_usernames = set()
-            active_map = {}
-            for e in active_entries:
-                uname = e.get("user") or e.get("name") or e.get("username")
-                if not uname:
-                    continue
-                active_usernames.add(uname)
-                active_map[uname] = e
-
-            # Update active status in DB
-            if active_usernames:
-                db_active_rows = (
-                    self.db.execute_query(
-                        "SELECT username, is_active FROM all_users WHERE username = ANY(%s)",
-                        (list(active_usernames),),
-                        fetch=True,
-                    )
-                    or []
-                )
-                db_active_set = {
-                    r["username"] for r in db_active_rows if r.get("is_active")
-                }
-                to_mark_active = [u for u in active_usernames if u not in db_active_set]
-                if to_mark_active:
-                    self.db.update_user_active_status(to_mark_active, True)
-            else:
-                db_active_set = set()
-
-            db_currently_active = (
-                self.db.execute_query(
-                    "SELECT username FROM all_users WHERE is_active = TRUE", fetch=True
-                )
-                or []
-            )
-            db_currently_active_set = {r["username"] for r in db_currently_active}
-            to_mark_inactive = [
-                u for u in db_currently_active_set if u not in active_usernames
-            ]
-            if to_mark_inactive:
-                self.db.update_user_active_status(to_mark_inactive, False)
-
-            for username in active_usernames:
-                voucher = self.db.get_voucher(username)
-                if voucher and not voucher.get("is_used"):
-                    self._handle_voucher_activation(username, active_map.get(username))
-                self._maybe_update_usage(username)
-
-        except Exception:
-            logger.exception("monitor_active_users failed")
-
-    def _handle_voucher_activation(
-        self, username: str, active_entry: Optional[Dict[str, Any]] = None
-    ):
-        """Mark voucher used and create SALE transaction safely."""
-        try:
-            voucher = self.db.get_voucher(username)
-            if not voucher or voucher.get("is_used"):
-                return
-
-            profile_name = voucher.get("profile_name")
-            profile_info = self.db.get_profile(profile_name)
-            price = profile_info.get("price", 1000) if profile_info else 1000
-
-            with self._db_lock:
-                existing_tx = self.db.execute_query(
-                    "SELECT id FROM financial_transactions WHERE voucher_code=%s AND transaction_type='SALE'",
-                    (username,),
-                    fetch_one=True,
-                )
-                if existing_tx:
-                    if not voucher.get("is_used"):
-                        self.db.mark_voucher_used(username)
-                    return
-
-                self.db.mark_voucher_used(username)
-                tx = FinancialTransaction(
-                    voucher_code=username,
-                    amount=price,
-                    transaction_type="SALE",
-                    transaction_date=datetime.datetime.now(),
-                )
-                self.db.add_transaction(tx)
-                logger.info("Recorded SALE for voucher %s amount=%s", username, price)
-
-        except Exception:
-            logger.exception("_handle_voucher_activation failed for %s", username)
-
     def _maybe_update_usage(self, username: str):
         """Update voucher usage only when threshold exceeded or max_age exceeded."""
         try:
@@ -349,11 +293,27 @@ class MonitoringService:
                     if hasattr(self.db, "update_voucher_usage"):
                         self.db.update_voucher_usage(username, total)
                     else:
+                         # Fallback update if method missing
                         self.db.execute_query(
                             "UPDATE vouchers SET bytes_used = %s WHERE voucher_code = %s",
                             (total, username),
                         )
+                    
+                    # Also update all_users bytes_used
+                    self.db.execute_query(
+                        "UPDATE all_users SET bytes_used = %s WHERE username = %s",
+                        (total, username)
+                    )
+
                 self._usage_cache[username] = {"bytes": total, "ts": now}
+                
+                # Emit update if socketio available
+                if self.socketio:
+                   self.socketio.emit('user_update', {
+                       'username': username,
+                       'bytes_used': total,
+                       'active': True
+                   })
 
         except Exception:
             logger.exception("_maybe_update_usage failed for %s", username)
@@ -435,3 +395,53 @@ class MonitoringService:
 
         except Exception:
             logger.exception("check_expired_users failed")
+
+    def snapshot_traffic(self):
+        """Snapshot traffic for all active users"""
+        try:
+            active_entries = self.mikrotik.get_active_users() or []
+            if not active_entries:
+                return
+
+            snapshots = []
+            timestamp = datetime.datetime.now()
+            
+            # Emit live traffic event
+            live_traffic_data = []
+
+            for entry in active_entries:
+                username = entry.get("user") or entry.get("name")
+                if not username: continue
+                
+                try:
+                    bytes_in = int(entry.get("bytes-in", 0))
+                    bytes_out = int(entry.get("bytes-out", 0))
+                except (ValueError, TypeError):
+                    continue
+
+                snapshots.append({
+                    "username": username,
+                    "timestamp": timestamp,
+                    "bytes_in": bytes_in,
+                    "bytes_out": bytes_out
+                })
+                
+                live_traffic_data.append({
+                    "username": username,
+                    "bytes_in": bytes_in,
+                    "bytes_out": bytes_out
+                })
+
+            # Save history to DB
+            if hasattr(self.db, 'record_traffic_snapshot'):
+                self.db.record_traffic_snapshot(snapshots)
+                
+            # Emit WebSocket event for live graph
+            if self.socketio:
+                self.socketio.emit('traffic_update', {
+                    'timestamp': timestamp.isoformat(),
+                    'data': live_traffic_data
+                })
+
+        except Exception:
+            logger.exception("snapshot_traffic failed")
