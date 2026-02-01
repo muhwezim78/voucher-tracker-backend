@@ -171,14 +171,26 @@ def create_app():
     )
     app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", app.config["SECRET_KEY"])
 
-    # Initialize CORS with full configuration for preflight requests
-    # Ensure it handles both / and /api prefixed routes
+    # Initialize CORS with extremely permissive settings for debugging
+    # We will restrict this once we confirm it works
+    allowed_origins = config.CORS_ORIGINS
+    if "*" not in allowed_origins:
+        allowed_origins.append("*") # Temporary fallback for debugging
+        
     CORS(app, 
-         origins=config.CORS_ORIGINS,
+         resources={r"/*": {"origins": "*"}}, # Broadest possible for debugging
          supports_credentials=True,
-         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"],
          methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
          expose_headers=["Content-Type", "Authorization"])
+
+    @app.before_request
+    def log_request_info():
+        logger.debug('Headers: %s', request.headers)
+        logger.debug('Body: %s', request.get_data())
+        origin = request.headers.get('Origin')
+        if origin:
+            logger.info(f"Incoming request from Origin: {origin}")
 
     # Initialize SocketIO
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")

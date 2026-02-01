@@ -141,8 +141,13 @@ class VoucherService:
 
         # Increase workers for big tasks
         max_workers = min(10, quantity)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            creation_results = list(executor.map(create_on_mikrotik, codes))
+        creation_results = []
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                creation_results = list(executor.map(create_on_mikrotik, codes))
+        except Exception as e:
+            logger.error(f"Critical error during parallel voucher creation: {e}")
+            # If everything failed, we still have successful_vouchers check below
 
         # Filter successes
         successful_vouchers = [v for v in creation_results if v is not None]
