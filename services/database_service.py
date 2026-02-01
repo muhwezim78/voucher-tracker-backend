@@ -2,7 +2,7 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor, execute_batch
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import threading
 from datetime import datetime
 from contextlib import contextmanager
