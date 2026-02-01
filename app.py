@@ -171,18 +171,18 @@ def create_app():
     )
     app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", app.config["SECRET_KEY"])
 
-    # Initialize CORS with extremely permissive settings for debugging
-    # We will restrict this once we confirm it works
-    allowed_origins = config.CORS_ORIGINS
-    if "*" not in allowed_origins:
-        allowed_origins.append("*") # Temporary fallback for debugging
-        
-    CORS(app, 
-         resources={r"/*": {"origins": "*"}}, # Broadest possible for debugging
-         supports_credentials=True,
-         allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"],
-         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-         expose_headers=["Content-Type", "Authorization"])
+    # Initialize CORS with standard settings
+    CORS(app, supports_credentials=True)
+
+    @app.after_request
+    def add_cors_headers(response):
+        origin = request.headers.get('Origin')
+        if origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
 
     @app.before_request
     def log_request_info():
