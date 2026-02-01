@@ -246,10 +246,18 @@ def init_users_routes(app, database_service, mikrotik_manager, auth_service=None
 
         # Load credentials from environment
         admin_email = os.getenv("ADMIN_EMAIL")
-        admin_password_hash = os.getenv("ADMIN_PASSWORD_HASH")  # hashed password
+        admin_password_hash = os.getenv("ADMIN_PASSWORD_HASH")
+        admin_password_raw = os.getenv("ADMIN_PASSWORD")
 
-        # Simple email/password check
-        if email != admin_email or not check_password_hash(admin_password_hash, password):
+        # Verify credentials
+        is_valid = False
+        if email == admin_email:
+            if admin_password_raw and password == admin_password_raw:
+                is_valid = True
+            elif admin_password_hash and check_password_hash(admin_password_hash, password):
+                is_valid = True
+
+        if not is_valid:
             return jsonify({"error": "Invalid credentials"}), 401
 
         # Successful login - Create a temporary JWT for the admin
