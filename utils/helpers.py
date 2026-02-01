@@ -108,8 +108,10 @@ def check_uptime_limit(current_uptime: str, uptime_limit: str) -> bool:
         logger.error(f"Error in check_uptime_limit: {e}")
         return False
     
-def calculate_expiry_time(validity_period: int) -> datetime:
+def calculate_expiry_time(validity_period: int = None) -> datetime:
     """Calculate expiry time based on validity period in hours"""
+    if validity_period is None:
+        validity_period = 24  # Default to 24 hours
     return datetime.now() + timedelta(hours=validity_period)
 
 def format_bytes(bytes_count: int) -> str:
